@@ -220,8 +220,10 @@ html:not([data-theme-id]) .pult-thread-view {
 
 /* Settings first, taking the room they measure their labels against; then
    the thread's activity and notices, a draft's environment and branch, the
-   shell's own entries (`data-chat-composer-slot-item="shell"`: the thread's
-   Explorer, branch and environment), the context window and attachments. */
+   icons: the thread's Explorer (the shell's,
+   `data-chat-composer-slot-item="shell"`), branch (`BranchEntry.tsx`) and
+   environment (the shell's), the context window, access (upstream's runtime
+   mode), attachments. */
 .pult-composer-bar > [data-chat-composer-slot-item="controls"] {
   flex: 1 1 0;
 }
@@ -243,12 +245,89 @@ html:not([data-theme-id]) .pult-thread-view {
   order: 4;
 }
 
-.pult-composer-bar > [data-chat-composer-slot-item="meter"] {
+.pult-composer-bar > [data-chat-composer-slot-item="branch"] {
   order: 5;
 }
 
-.pult-composer-bar > [data-chat-composer-slot-item="actions"] {
+.pult-composer-bar > [data-chat-composer-slot-item="environment"] {
   order: 6;
+}
+
+.pult-composer-bar > [data-chat-composer-slot-item="meter"] {
+  order: 7;
+}
+
+.pult-composer-bar > [data-chat-composer-slot-item="access"] {
+  order: 8;
+}
+
+.pult-composer-bar > [data-chat-composer-slot-item="actions"] {
+  order: 9;
+}
+
+/* The bar's icons in the workbench's icon colour, as the shell's codicons
+   beside them: upstream's draw theirs muted. */
+.pult-composer-bar > :is([data-chat-composer-slot-item="access"], [data-chat-composer-slot-item="branch"]) button svg,
+.pult-composer-bar [data-chat-composer-actions="right"] button:not([type="submit"]) svg {
+  color: var(--vscode-icon-foreground);
+}
+
+/* Access, an icon button as the bar's others: its mode's name goes, kept
+   for screen readers and named in its tooltip. */
+.pult-composer-bar > [data-chat-composer-slot-item="access"] button {
+  width: var(--pult-bar-button-size);
+  height: var(--pult-bar-button-size);
+  padding: 0;
+  border-width: 0;
+  border-radius: 6px;
+}
+
+.pult-composer-bar > [data-chat-composer-slot-item="access"] button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.pult-composer-bar > [data-chat-composer-slot-item="access"] [data-composer-control-label] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+/* The thread's branch, its picker's trigger an icon button as the bar's
+   others: the branch's name and the chevron go, the name kept for screen
+   readers; a linked pull request's badge stays beside it. */
+.pult-bar-branch {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.pult-bar-branch [aria-haspopup] {
+  width: var(--pult-bar-button-size);
+  height: var(--pult-bar-button-size);
+  padding: 0;
+  border-width: 0;
+  border-radius: 6px;
+}
+
+.pult-bar-branch [aria-haspopup] svg {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+}
+
+.pult-bar-branch [aria-haspopup] [data-composer-label] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.pult-bar-branch [aria-haspopup] [data-composer-label] ~ svg {
+  display: none;
 }
 
 /* The context window meter's arc, orange once the context is heavy and red
@@ -430,8 +509,8 @@ html:not([data-theme-id]) .pult-thread-view {
 }
 
 /* The settings as plain labels: no picker shows its chevron, and reasoning
-   and access show no icon beside their label (the icon alone stays when a
-   picker shows its icon alone). */
+   and the plan toggle show no icon beside their label (the icon alone stays
+   when a picker shows its icon alone). */
 .pult-composer-bar [data-composer-control-chevron],
 .pult-composer-bar svg.lucide-chevron-down {
   display: none;

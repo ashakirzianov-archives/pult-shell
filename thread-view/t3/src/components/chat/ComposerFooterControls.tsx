@@ -38,7 +38,9 @@ export const ComposerFooterModeControls = memo(function ComposerFooterModeContro
 }) {
   const size = props.size ?? "sm";
   const composerFloatingLayerProps = useComposerMenuProps();
-  const [open, setOpen] = useComposerMenuState(props.hidden);
+  // Pult: in a slot, access is an item of its own, which the controls' overflow never hides.
+  const inSlot = useContext(ComposerControlsSlot) !== null;
+  const [open, setOpen] = useComposerMenuState(inSlot ? false : props.hidden);
   const runtimeModeOption =
     props.runtimeModeOptions.find((option) => option.mode === props.runtimeMode) ??
     supervisedRuntimeModeOption;
@@ -85,6 +87,7 @@ export const ComposerFooterModeControls = memo(function ComposerFooterModeContro
 
   return (
     <>
+      <ComposerControlsSlotItem item="access">
       <Tooltip>
         <Select
           open={open}
@@ -130,8 +133,11 @@ export const ComposerFooterModeControls = memo(function ComposerFooterModeContro
             })}
           </SelectPopup>
         </Select>
-        <TooltipPopup side="top">{runtimeModeOption.description}</TooltipPopup>
+        <TooltipPopup side="top">
+          {inSlot ? runtimeModeOption.label : runtimeModeOption.description}
+        </TooltipPopup>
       </Tooltip>
+      </ComposerControlsSlotItem>
 
       {interactionModeToggle}
     </>

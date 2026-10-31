@@ -8,7 +8,7 @@ import { createRoot } from "react-dom/client";
 
 import type { MountedView, ViewTarget } from "../../thread-view/shell/main.tsx";
 import { connection } from "../connection/connection.ts";
-import { hoverProps } from "../threads/barEntries.tsx";
+import { BarTip } from "../threads/barEntries.tsx";
 import { isShellTab, threadView } from "../threads/pane.tsx";
 import { isSwitchingThread, onDidSelectThread, selectedDraft, selectedThread } from "../threads/selection.ts";
 import "./composer.css";
@@ -226,9 +226,11 @@ function addCloseEntry(bar: HTMLElement): () => void {
   bar.append(entry);
   const root = createRoot(entry);
   root.render(
-    <button type="button" className="pult-bar-entry pult-bar-button" {...hoverProps("Hide composer")} onClick={() => composerStrip.setOpen(false)}>
-      <i className="codicon codicon-close" aria-hidden />
-    </button>,
+    <BarTip label="Hide composer">
+      <button type="button" className="pult-bar-entry pult-bar-button" aria-label="Hide composer" onClick={() => composerStrip.setOpen(false)}>
+        <i className="codicon codicon-close" aria-hidden />
+      </button>
+    </BarTip>,
   );
   return () => root.unmount();
 }

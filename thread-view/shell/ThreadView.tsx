@@ -26,6 +26,7 @@ import { useNewThreadHandler } from "../t3/src/hooks/useHandleNewThread";
 import { AppAtomRegistryProvider } from "../t3/src/rpc/atomRegistry";
 import { useProjects, useThreadProjection } from "../t3/src/state/entities";
 import { resolveThreadRouteTarget } from "../t3/src/threadRoutes";
+import { ThreadBranchEntry } from "./BranchEntry.tsx";
 import { draftKey, heldDraft } from "./drafts.ts";
 import { makeThreadRouter } from "./routes.tsx";
 import { threadViewHost } from "./host.ts";
@@ -203,14 +204,17 @@ function makeRoot(mount: Mount, composerOnly: boolean) {
   }
   return function Root() {
     const target = useTarget(mount);
-    // A composer-only mount leaves the page-wide shortcuts and the activity to the pane's view, as upstream's background thread does.
+    // A composer-only mount leaves the page-wide shortcuts and the activity to the pane's view, as upstream's background thread does, and the thread's branch to the pane's bar.
     return (
       <BackgroundThreadContext value={composerOnly}>
         <ToastProvider>
           <AnchoredToastProvider>
             <NavigationFollower />
             {target.kind !== "thread" || composerOnly ? null : (
-              <ActivityReporter environmentId={target.environmentId} threadId={target.threadId} />
+              <>
+                <ActivityReporter environmentId={target.environmentId} threadId={target.threadId} />
+                <ThreadBranchEntry environmentId={target.environmentId} threadId={target.threadId} />
+              </>
             )}
             <ConfirmDialogHost />
             <CustomSnoozeDialogHost />
