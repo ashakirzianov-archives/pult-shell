@@ -1,4 +1,4 @@
-import { getService, ICommandService, IDecorationsService, IWorkspaceContextService } from "@codingame/monaco-vscode-api";
+import { getService, ICommandService, IDecorationsService, ILabelService, IWorkspaceContextService } from "@codingame/monaco-vscode-api";
 import { registerCustomProvider } from "@codingame/monaco-vscode-files-service-override";
 
 import { connection } from "../connection/index.ts";
@@ -25,7 +25,11 @@ import {
  * files current: each environment's folders' watches where its server has
  * them, synced as the folders change, and turn ends and reconnects in every
  * environment; and the explorer refreshed when the projects under a folder
- * above them change, since such a folder lists only the way to them.
+ * above them change, since such a folder lists only the way to them. A
+ * `pult:` path outside the workspace's folders (another checkout's row in
+ * Source Control, a tab's hover) is labelled as its host path: unformatted,
+ * the label service tildifies it by the page's home, `/`, as `~/Users/…`,
+ * and it knows no environment's home.
  */
 export function registerPultFiles(): void {
   const provider = new PultFileSystemProvider();
@@ -37,6 +41,7 @@ export function registerPultFiles(): void {
 async function followWorkspace(provider: PultFileSystemProvider): Promise<void> {
   await servicesReady;
   (await getService(IDecorationsService)).registerDecorationsProvider(workspaceDecorations);
+  (await getService(ILabelService)).registerFormatter({ scheme: PULT_SCHEME, formatting: { label: "${path}", separator: "/" } });
   (await getService(IWorkspaceContextService)).onDidChangeWorkspaceFolders(() => {
     for (const files of allWorkspaceFiles()) void files.syncWatches();
   });
