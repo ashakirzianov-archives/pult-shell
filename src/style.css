@@ -119,7 +119,7 @@ body,
 }
 
 .monaco-workbench.nosidebar .part.editor > .content .editor-group-container:not(.part.editor .split-view-view:not(:first-child) *) > .title > .tabs-and-actions-container {
-  padding-left: calc(var(--pult-traffic-lights, 0px) + 34px);
+  padding-left: calc(var(--pult-traffic-lights, 0px) + 30px);
 }
 
 /* What Pult's default mode hides and VS Code mode shows (src/mode.ts puts

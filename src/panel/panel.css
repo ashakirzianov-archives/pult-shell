@@ -741,7 +741,7 @@
   text-align: center;
 }
 
-/* Expand Panel, while the panel is collapsed, at the window's top-left after the traffic lights, over the room the top-left editor group's tabs row leaves it (src/style.css). */
+/* Expand Panel, while the panel is collapsed, at the window's top-left after the traffic lights, where the header's Collapse Panel sits, over the room the top-left editor group's tabs row leaves it (src/style.css). */
 .pult-panel-expand {
   position: absolute;
   top: 0;
@@ -750,7 +750,7 @@
   display: flex;
   align-items: center;
   height: 35px;
-  padding-left: 6px;
+  padding-left: 2px;
   color: var(--vscode-foreground);
 }
 

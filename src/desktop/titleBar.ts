@@ -7,15 +7,20 @@ import type { PultDesktop } from "./api.ts";
  * panel collapsed the top-left editor group's tabs row. The page leaves
  * them `--pult-traffic-lights` at that row's start (`src/panel/panel.css`,
  * `src/style.css`), and those rows drag the window as a title bar does. The
- * room goes while the window is full screen, where macOS hides the lights.
- * Nothing where the wrapper reports no lights: a frame of the OS's own.
+ * lights keep their size whatever the page's zoom, so the wrapper places
+ * them again, and the room changes, as the zoom does (a zoom changes the
+ * page's `devicePixelRatio`, as a move to a display of another scale does)
+ * and as the window enters and leaves full screen, where macOS hides them.
+ * No room where the wrapper reports none: a frame of the OS's own.
  */
 export function installDesktopTitleBar(desktop: PultDesktop): void {
   const { titleBar } = desktop;
-  if (titleBar.lightsWidth === 0) return;
-  const apply = (fullScreen: boolean) =>
-    document.documentElement.style.setProperty("--pult-traffic-lights", fullScreen ? "0px" : `${titleBar.lightsWidth}px`);
-  apply(false);
-  void titleBar.isFullScreen().then(apply);
-  titleBar.onFullScreenChange(apply);
+  const layout = () =>
+    void titleBar.layout().then((room) => document.documentElement.style.setProperty("--pult-traffic-lights", `${room}px`));
+  const followZoom = () => {
+    matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`).addEventListener("change", followZoom, { once: true });
+    layout();
+  };
+  followZoom();
+  titleBar.onFullScreenChange(layout);
 }

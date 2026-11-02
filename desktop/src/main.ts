@@ -23,7 +23,7 @@ import {
 } from "electron";
 
 import { appDisplayName, appUserDataName } from "../../src/identity.ts";
-import { Channel, TOP_ROW_HEIGHT, VERSION_ARG, type Reply } from "./ipc.ts";
+import { Channel, titleBarLayout, VERSION_ARG, type Reply } from "./ipc.ts";
 import { openSecretStore } from "./secretStore.ts";
 import { windowState } from "./windowState.ts";
 
@@ -105,10 +105,10 @@ function openWindow(): void {
     show: false,
     title: app.name,
     backgroundColor: "#1f1f1f",
-    // The page's chrome runs to the window's top edge: on macOS no title bar, the traffic lights 12px in
-    // and centred in the page's top row, at its start, which the page leaves them (`TRAFFIC_LIGHTS_WIDTH`).
+    // The page's chrome runs to the window's top edge: on macOS no title bar, the traffic lights in the
+    // page's top row, at its start, placed again for the page's zoom once it loads (`titleBarLayout`).
     ...(process.platform === "darwin"
-      ? { titleBarStyle: "hidden" as const, trafficLightPosition: { x: 12, y: Math.round(TOP_ROW_HEIGHT / 2 - 6) } }
+      ? { titleBarStyle: "hidden" as const, trafficLightPosition: titleBarLayout(1, false).position }
       : {}),
     webPreferences: {
       preload: NodePath.join(__dirname, "preload.cjs"),
@@ -201,9 +201,17 @@ function handleSecrets(): void {
   handle(Channel.secretsKeys, () => secrets.keys());
 }
 
-/** Answers `window.pultDesktop.titleBar.isFullScreen`, for the page's own window. */
+/**
+ * Answers `window.pultDesktop.titleBar.layout`, for the page's own window:
+ * places its traffic lights for the page's zoom, and answers their room.
+ */
 function handleWindowState(): void {
-  handle(Channel.windowIsFullScreen, (event) => BrowserWindow.fromWebContents(event.sender)?.isFullScreen() ?? false);
+  handle(Channel.windowTitleBarLayout, (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const { position, room } = titleBarLayout(event.sender.getZoomFactor(), window?.isFullScreen() ?? false);
+    if (process.platform === "darwin") window?.setWindowButtonPosition(position);
+    return room;
+  });
 }
 
 /**
