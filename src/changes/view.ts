@@ -28,7 +28,9 @@ import type {
   ISCMResourceDecorations,
   ISCMResourceGroup,
 } from "@codingame/monaco-vscode-api/vscode/vs/workbench/contrib/scm/common/scm";
-import type { ReviewDiffPreviewSource, ReviewDiffPreviewSourceKind } from "@t3tools/contracts";
+import { ThreadId, type ReviewDiffPreviewSource, type ReviewDiffPreviewSourceKind } from "@t3tools/contracts";
+
+import type { TurnCheckpoints } from "../../thread-view/shell/main.tsx";
 
 import { pultUri } from "../panel/explorer.ts";
 import { onDidSelectThread, selectedThread, selectThread, type ThreadSelection } from "../threads/selection.ts";
@@ -44,7 +46,9 @@ const PROVIDER_ID = "pult-shell";
 /** A changed file of a source, with what the server's file contents RPC needs to show its sides. */
 interface Change {
   readonly cwd: string;
-  readonly sourceKind: ReviewDiffPreviewSourceKind;
+  /** A server's diff source, or a turn's, between its checkpoints. */
+  readonly sourceKind: ReviewDiffPreviewSourceKind | "turn";
+  /** A turn's checkpoint refs, before and after it. */
   readonly baseRef: string | null;
   readonly headRef: string | null;
   /** Relative to `cwd`, after the change. */
@@ -60,6 +64,9 @@ interface Side {
   readonly change: Change;
   readonly side: "old" | "new";
 }
+
+/** The group of a turn the thread view named, above the server's sources, while the selected thread has one. */
+const TURN_GROUP = "turn";
 
 const GROUPS: ReadonlyArray<{ readonly id: string; readonly label: string; readonly kind: ReviewDiffPreviewSourceKind }> = [
   { id: "changes", label: "Changes", kind: "branch-range" },
@@ -108,8 +115,8 @@ class ChangesGroup implements ISCMResourceGroup {
   contextValue: string | undefined = undefined;
   readonly hideWhenEmpty = true;
   readonly multiDiffEditorEnableViewChanges = false;
-  // The label never changes.
-  readonly onDidChange = Event.None;
+  private readonly labelChanged = new Emitter<void>();
+  readonly onDidChange = this.labelChanged.event;
   private readonly resourcesChanged = new Emitter<void>();
   readonly onDidChangeResources = this.resourcesChanged.event;
   private tree: ResourceTree<ChangeResource, ChangesGroup> | undefined;
@@ -117,7 +124,7 @@ class ChangesGroup implements ISCMResourceGroup {
   constructor(
     readonly provider: ChangesProvider,
     readonly id: string,
-    readonly label: string,
+    public label: string,
     private readonly extUri: IExtUri,
   ) {}
 
@@ -130,13 +137,18 @@ class ChangesGroup implements ISCMResourceGroup {
     return this.tree;
   }
 
-  set(resources: ReadonlyArray<ChangeResource>): void {
+  set(resources: ReadonlyArray<ChangeResource>, label = this.label): void {
+    if (label !== this.label) {
+      this.label = label;
+      this.labelChanged.fire();
+    }
     this.resources = resources;
     this.tree = undefined;
     this.resourcesChanged.fire();
   }
 
   dispose(): void {
+    this.labelChanged.dispose();
     this.resourcesChanged.dispose();
   }
 }
@@ -144,7 +156,7 @@ class ChangesGroup implements ISCMResourceGroup {
 let providers = 0;
 let inputs = 0;
 
-/** The source control of one root: no input, no history, the two groups. */
+/** The source control of one root: no input, no history, the turn's group and the server's two. */
 class ChangesProvider implements ISCMProvider {
   readonly id = `pult-shell.changes.${++providers}`;
   readonly providerId = PROVIDER_ID;
@@ -169,7 +181,10 @@ class ChangesProvider implements ISCMProvider {
     readonly inputBoxTextModel: ITextModel,
     extUri: IExtUri,
   ) {
-    this.groups = GROUPS.map(({ id, label }) => new ChangesGroup(this, id, label, extUri));
+    this.groups = [
+      new ChangesGroup(this, TURN_GROUP, "Turn", extUri),
+      ...GROUPS.map(({ id, label }) => new ChangesGroup(this, id, label, extUri)),
+    ];
   }
 
   group(id: string): ChangesGroup {
@@ -208,9 +223,12 @@ type Services = {
  * server's two diff sources as its groups, Changes (the branch against its
  * base) and Working Tree; a resource opens VS Code's diff editor, its old
  * side from the server, its new side the live `pult:` file, or the server's
- * for a deleted file or a committed change. It follows the shell's
- * selection, and refreshes when the thread's latest run finishes and on
- * "Pult: Refresh Changes".
+ * for a deleted file or a committed change. Above them, while the selected
+ * thread has one, a turn's group, "Turn N": the turn the thread view's
+ * changed files card last opened for the thread, both sides of each file
+ * from the turn's checkpoints, until the group's Close. It follows the
+ * shell's selection, and refreshes when the thread's latest run finishes
+ * and on "Pult: Refresh Changes".
  */
 class ChangesView {
   private repository:
@@ -224,6 +242,8 @@ class ChangesView {
   /** The changes by their `pult:` URI's path, for the decorations. */
   private byPath = new Map<string, Change>();
   private readonly contents = new Map<string, Promise<{ readonly oldContents: string; readonly newContents: string }>>();
+  /** Each thread's turn, by `turnKey`, kept while the page lives; a turn's checkpoints never change. */
+  private readonly turns = new Map<string, Promise<Turn>>();
   private failure: string | null = null;
   private readonly decorationsChanged = new Emitter<URI[]>();
 
@@ -275,14 +295,18 @@ class ChangesView {
     this.selection = selection;
     this.finishedAt = this.selected()?.latestRun?.finishedAt ?? null;
     this.sync(true);
+    void this.applyTurn();
+  }
+
+  private root(thread: NonNullable<ReturnType<ChangesView["selected"]>>): string | undefined {
+    return thread.projectRoot ?? threadStore.project(thread.environmentId, thread.projectId)?.root ?? undefined;
   }
 
   /** The source control follows the selected thread's root as the store knows it; `refresh` reloads an unchanged one too. */
   private sync(refresh: boolean): void {
     const thread = this.selected();
     const environmentId = thread?.environmentId;
-    const root =
-      thread === undefined ? undefined : (thread.projectRoot ?? threadStore.project(thread.environmentId, thread.projectId)?.root ?? undefined);
+    const root = thread === undefined ? undefined : this.root(thread);
     if (thread === undefined || environmentId === undefined || root === undefined) {
       if (this.repository === undefined) return;
       this.generation += 1;
@@ -306,19 +330,64 @@ class ChangesView {
     this.repository = { repository, provider, environmentId, key };
     this.apply([]);
     this.refresh();
+    void this.applyTurn();
   }
 
-  /** The Source Control view, on `thread` selected, with the change of `path` open when the view has it. */
-  async show(thread: ThreadSelection | null, path: string | null): Promise<void> {
+  /**
+   * The Source Control view, on `thread` selected, with `turn` its turn's
+   * group when given, and the change of `path` open when the view has it,
+   * the turn's first.
+   */
+  async show(thread: ThreadSelection | null, path: string | null, turn: TurnCheckpoints | null): Promise<void> {
     const selected = selectedThread();
     if (thread !== null && (thread.threadId !== selected?.threadId || thread.environmentId !== selected.environmentId)) {
       await selectThread(thread.environmentId, thread.threadId);
     }
+    const target = thread ?? this.selection;
+    const root = target === null ? undefined : this.rootOf(target);
+    if (target !== null && turn !== null && root !== undefined) {
+      this.turns.set(turnKey(target), loadTurn(target, root, turn));
+      void this.applyTurn();
+    }
     await this.services.commands.executeCommand("workbench.view.scm");
     if (path === null) return;
+    const turnChange = target === null ? undefined : (await this.turnOf(target))?.changes.find((change) => change.path === path);
+    if (turnChange !== undefined) return this.open(turnChange, false);
     await this.pending;
     const change = GROUPS.map((group) => this.changes.get(`${group.kind}:${path}`)).find((found) => found !== undefined);
     if (change !== undefined) await this.open(change, false);
+  }
+
+  private rootOf(selection: ThreadSelection): string | undefined {
+    const thread = threadStore.thread(selection.environmentId, selection.threadId);
+    return thread === undefined ? undefined : this.root(thread);
+  }
+
+  /** The thread's turn, or undefined when it has none. */
+  private async turnOf(selection: ThreadSelection): Promise<Turn | undefined> {
+    return this.turns.get(turnKey(selection));
+  }
+
+  /** The turn's group shows the selected thread's turn, or hides. */
+  private async applyTurn(): Promise<void> {
+    const provider = this.repository?.provider;
+    const selection = this.selection;
+    if (provider === undefined) return;
+    const group = provider.group(TURN_GROUP);
+    const turn = selection === null ? undefined : await this.turnOf(selection);
+    if (this.repository?.provider !== provider || this.selection !== selection) return;
+    if (turn === undefined || turn.root !== provider.root) return group.set([]);
+    group.set(
+      turn.changes.map((change) => new ChangeResource(group, change, this)),
+      `Turn ${turn.turnCount}`,
+    );
+  }
+
+  /** The selected thread's turn forgotten, its group gone: the group's Close. */
+  closeTurn(): void {
+    if (this.selection === null) return;
+    this.turns.delete(turnKey(this.selection));
+    void this.applyTurn();
   }
 
   /** The newest refresh wins; an older one's answer is dropped. */
@@ -365,7 +434,10 @@ class ChangesView {
   /** VS Code's diff editor on the change's two sides. */
   async open(change: Change, preserveFocus: boolean): Promise<void> {
     const { original, modified } = this.sides(change);
-    const group = GROUPS.find((candidate) => candidate.kind === change.sourceKind)?.label ?? "Changes";
+    const group =
+      change.sourceKind === "turn"
+        ? (this.repository?.provider.group(TURN_GROUP).label ?? "Turn")
+        : (GROUPS.find((candidate) => candidate.kind === change.sourceKind)?.label ?? "Changes");
     await this.services.editors.openEditor({
       original: { resource: original },
       modified: { resource: modified },
@@ -374,7 +446,7 @@ class ChangesView {
     });
   }
 
-  /** The diff's sides: the server's old one, and the live file for a working-tree change but a deletion, else the server's new one. */
+  /** The diff's sides: the server's old one, and the live file for a working-tree change but a deletion, else the server's new one; a turn's both its checkpoints'. */
   sides(change: Change): { readonly original: URI; readonly modified: URI } {
     const live = change.sourceKind === "working-tree" && change.changeType !== "deleted";
     return { original: this.sideUri(change, "old"), modified: live ? this.fileUri(change) : this.sideUri(change, "new") };
@@ -384,10 +456,15 @@ class ChangesView {
     const { change, side } = JSON.parse(uri.query) as Side;
     const key = JSON.stringify([uri.authority, change.cwd, change.sourceKind, change.baseRef, change.headRef, change.previousPath, change.path]);
     let loading = this.contents.get(key);
+    if (loading === undefined && change.sourceKind === "turn") {
+      loading = turnContents(uri.authority, change);
+      this.contents.set(key, loading);
+    }
     if (loading === undefined) {
+      const sourceKind = change.sourceKind === "turn" ? "working-tree" : change.sourceKind;
       loading = changesServer(uri.authority).diffFileContents({
         cwd: change.cwd,
-        sourceKind: change.sourceKind,
+        sourceKind,
         changeType: change.changeType,
         baseRef: change.baseRef,
         headRef: change.headRef,
@@ -437,6 +514,81 @@ class ChangesView {
   }
 }
 
+/** A turn the changes view shows for a thread: its number, the root it was read under, and its files. */
+interface Turn {
+  readonly turnCount: number;
+  readonly root: string;
+  readonly changes: ReadonlyArray<Change>;
+}
+
+function turnKey(selection: ThreadSelection): string {
+  return `${selection.environmentId}\n${selection.threadId}`;
+}
+
+/**
+ * A turn's files as changes: the card's files with their counts, with how
+ * each changed from the server's patch of the turn (upstream's turn diff,
+ * whitespace kept, as the card counts it); a file the patch misses, or every
+ * file when the patch fails, counts as modified.
+ */
+async function loadTurn(selection: ThreadSelection, root: string, turn: TurnCheckpoints): Promise<Turn> {
+  const patch = await changesServer(selection.environmentId)
+    .turnDiff({
+      threadId: ThreadId.make(selection.threadId),
+      fromTurnCount: turn.turnCount - 1,
+      toTurnCount: turn.turnCount,
+      ignoreWhitespace: false,
+    })
+    .then(
+      (result) => result.diff,
+      () => "",
+    );
+  const parsed = new Map(patchFiles(patch).map((file) => [file.path, file]));
+  const changes = turn.files.map((stat): Change => {
+    const file = parsed.get(stat.path);
+    return {
+      cwd: root,
+      sourceKind: "turn",
+      baseRef: turn.fromRef,
+      headRef: turn.toRef,
+      path: stat.path,
+      previousPath: file?.previousPath ?? null,
+      changeType: file?.changeType ?? "change",
+      additions: stat.additions,
+      deletions: stat.deletions,
+    };
+  });
+  return { turnCount: turn.turnCount, root, changes };
+}
+
+/**
+ * A turn's change's two sides, each its file in one of the turn's
+ * checkpoints, which are commits under refs of the repository: the server's
+ * file contents RPC reads a working-tree change's old side at its base ref,
+ * and a deletion's new side not at all, so a deletion based on a checkpoint
+ * reads that checkpoint's file alone.
+ */
+async function turnContents(environmentId: string, change: Change): Promise<{ readonly oldContents: string; readonly newContents: string }> {
+  const read = async (ref: string | null, path: string) => {
+    if (ref === null) return "";
+    const contents = await changesServer(environmentId).diffFileContents({
+      cwd: change.cwd,
+      sourceKind: "working-tree",
+      changeType: "deleted",
+      baseRef: ref,
+      headRef: null,
+      oldPath: path,
+      newPath: path,
+    });
+    return contents.oldContents;
+  };
+  const [oldContents, newContents] = await Promise.all([
+    change.changeType === "new" ? "" : read(change.baseRef, change.previousPath ?? change.path),
+    change.changeType === "deleted" ? "" : read(change.headRef, change.path),
+  ]);
+  return { oldContents, newContents };
+}
+
 /** A source's files as changes: its stats, with how each changed from its patch; a file the truncated patch missed counts as modified. */
 function changesOf(cwd: string, source: ReviewDiffPreviewSource): Change[] {
   const parsed = new Map(patchFiles(source.diff).map((file) => [file.path, file]));
@@ -466,11 +618,12 @@ let started: Promise<ChangesView> | undefined;
 
 /**
  * Opens the Source Control view on `thread`, selecting it first if another
- * is selected, with the change of `path`, relative to its project's root,
- * open when the view lists it: the thread view's "Open diff".
+ * is selected, with `turn` as its turn's group when given, and the change of
+ * `path`, relative to its project's root, open when the view lists it: the
+ * thread view's "Open diff" and the changed files card's files.
  */
-export async function showChanges(thread: ThreadSelection | null, path: string | null): Promise<void> {
-  await (await started)?.show(thread, path);
+export async function showChanges(thread: ThreadSelection | null, path: string | null, turn: TurnCheckpoints | null = null): Promise<void> {
+  await (await started)?.show(thread, path, turn);
 }
 
 /** What the changes view shows and why, for the console's `pult.changes()`. */
@@ -480,20 +633,48 @@ export async function changesState() {
 
 /**
  * The changes view, started once the workbench's services are up, with
- * `pult-shell.showChanges <environmentId|null> <threadId|null> <path|null>`
- * and "Pult: Refresh Changes" (`pult-shell.refreshChanges`, also in the
- * Source Control view's title).
+ * `pult-shell.showChanges <environmentId|null> <threadId|null> <path|null> [turn]`,
+ * "Pult: Refresh Changes" (`pult-shell.refreshChanges`, also in the Source
+ * Control view's title) and the turn's group's Close
+ * (`pult-shell.closeTurnChanges`).
  */
 export function registerChanges(): void {
   started = ChangesView.start();
   started.catch((error: unknown) => console.error("[pult-shell] the changes view did not start", error));
   CommandsRegistry.registerCommand(
     "pult-shell.showChanges",
-    (_accessor, environmentId: unknown, threadId: unknown, path: unknown) =>
+    (_accessor, environmentId: unknown, threadId: unknown, path: unknown, turn: unknown) =>
       showChanges(
         typeof environmentId === "string" && typeof threadId === "string" ? { environmentId, threadId } : null,
         typeof path === "string" ? path : null,
+        isTurnCheckpoints(turn) ? turn : null,
       ),
+  );
+  registerAction2(
+    class extends Action2 {
+      constructor() {
+        super({
+          id: "pult-shell.closeTurnChanges",
+          title: { value: "Close Turn", original: "Close Turn" },
+          category: { value: "Pult", original: "Pult" },
+          icon: Codicon.close,
+          menu: [
+            {
+              id: MenuId.SCMResourceGroupContext,
+              group: "inline",
+              when: ContextKeyExpr.and(
+                ContextKeyExpr.equals("scmProvider", PROVIDER_ID),
+                ContextKeyExpr.equals("scmResourceGroup", TURN_GROUP),
+              ),
+            },
+          ],
+        });
+      }
+
+      async run(): Promise<void> {
+        (await started)?.closeTurn();
+      }
+    },
   );
   registerAction2(
     class extends Action2 {
@@ -513,4 +694,10 @@ export function registerChanges(): void {
       }
     },
   );
+}
+
+function isTurnCheckpoints(value: unknown): value is TurnCheckpoints {
+  if (typeof value !== "object" || value === null) return false;
+  const { turnCount, fromRef, toRef, files } = value as Partial<Record<keyof TurnCheckpoints, unknown>>;
+  return typeof turnCount === "number" && typeof fromRef === "string" && typeof toRef === "string" && Array.isArray(files);
 }

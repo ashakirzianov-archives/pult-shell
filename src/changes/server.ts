@@ -1,5 +1,8 @@
 import { request } from "@t3tools/client-runtime/rpc";
 import {
+  ORCHESTRATION_V2_WS_METHODS,
+  type OrchestrationGetTurnDiffInput,
+  type OrchestrationGetTurnDiffResult,
   type ReviewDiffFileContentsInput,
   type ReviewDiffFileContentsResult,
   type ReviewDiffPreviewInput,
@@ -12,8 +15,9 @@ import { whenReady } from "../files/server.ts";
 
 /**
  * The server's review calls the changes view uses, on the page's connection
- * to `environmentId`: a project's diff sources with their files, and a file's
- * two sides. A call waits for a connecting environment, as the files' do.
+ * to `environmentId`: a project's diff sources with their files, a file's
+ * two sides, and a turn's patch. A call waits for a connecting environment,
+ * as the files' do.
  */
 export function changesServer(environmentId: string) {
   return {
@@ -24,6 +28,10 @@ export function changesServer(environmentId: string) {
     diffFileContents: async (input: ReviewDiffFileContentsInput): Promise<ReviewDiffFileContentsResult> => {
       await whenReady(environmentId);
       return connection.run(environmentId, request(WS_METHODS.reviewGetDiffFileContents, input));
+    },
+    turnDiff: async (input: OrchestrationGetTurnDiffInput): Promise<OrchestrationGetTurnDiffResult> => {
+      await whenReady(environmentId);
+      return connection.run(environmentId, request(ORCHESTRATION_V2_WS_METHODS.getTurnDiff, input));
     },
   };
 }

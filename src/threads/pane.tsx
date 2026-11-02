@@ -72,8 +72,8 @@ export function threadView() {
       // A draft the view went to, which it remembered as the project's.
       openDraft: (environmentId, projectId) => run("pult-shell.newThread", environmentId, projectId),
       openFile: (environmentId, threadId, path, line) => void openThreadFile(environmentId, threadId, path, line),
-      // The changes view (`src/changes/`): the Source Control view over the thread's project.
-      openChanges: (environmentId, threadId, path) => run("pult-shell.showChanges", environmentId, threadId, path),
+      // The changes view (`src/changes/`): the Source Control view over the thread's project, with a turn's group when the view named one.
+      openChanges: (environmentId, threadId, path, turn) => run("pult-shell.showChanges", environmentId, threadId, path, turn),
       // A native subagent's work is a runless turn the shell snapshot cannot see; the view's projection can.
       reportActivity: (activity) => threadStore.reportActivity(activity),
       // The view's System theme is the workbench theme's light or dark.

@@ -11,6 +11,7 @@ import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { selectThreadDiffPanelSelection, useDiffPanelStore } from "../t3/src/diffPanelStore";
 import { useRightPanelStore } from "../t3/src/rightPanelStore";
 import { threadViewHost } from "./host.ts";
+import { turnCheckpoints } from "./turnCheckpoints.ts";
 
 /**
  * Once, before any view mounts: files and the diff go to the shell, a
@@ -24,7 +25,12 @@ export function routeRightPanel(): void {
       if (kind !== "diff") return open(ref, kind);
       // The view selects the turn and its file in the diff store before opening the surface.
       const selection = selectThreadDiffPanelSelection(useDiffPanelStore.getState().byThreadKey, ref);
-      threadViewHost().openChanges(ref.environmentId, ref.threadId, selection.kind === "turn" ? selection.filePath : null);
+      threadViewHost().openChanges(
+        ref.environmentId,
+        ref.threadId,
+        selection.kind === "turn" ? selection.filePath : null,
+        selection.kind === "turn" ? turnCheckpoints(ref, selection.turnId) : null,
+      );
     },
     openProactive: (ref, surface, revision) =>
       surface.kind === "diff" ? false : openProactive(ref, surface, revision),

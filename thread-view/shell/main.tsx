@@ -17,7 +17,7 @@ import { setThreadViewHost, type ThreadViewHost } from "./host.ts";
 import { routeRightPanel } from "./rightPanel.ts";
 import { type MountedView, mountComposerView, mountDraftView, mountThreadView, type ViewTarget } from "./ThreadView.tsx";
 
-export type { ThreadViewHost } from "./host.ts";
+export type { ThreadViewHost, TurnCheckpoints } from "./host.ts";
 export type { ShellConnectionServices } from "./connectionRuntime.ts";
 export type { MountedView, ViewTarget } from "./ThreadView.tsx";
 

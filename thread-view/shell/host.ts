@@ -9,7 +9,8 @@ import type { ShellConnectionServices } from "./connectionRuntime.ts";
  * where a project's new thread does, and where what the view would show in
  * its right panel goes instead (`rightPanel.ts`): a file, as a path relative
  * to the thread's project root or an absolute host path, with a line to
- * reveal; the thread's changes, with a file's path when one was named; and
+ * reveal; the thread's changes, with a file's path when one was named and a
+ * turn's checkpoints when the view named a turn; and
  * what the view knows of its lineage's activity. Each names its
  * environment, as a pane mounts the view on one (`ThreadViewMounts`). It
  * also hands the colour scheme the view takes as the system's. The shell's
@@ -25,7 +26,13 @@ export interface ThreadViewHost {
    */
   readonly openDraft: (environmentId: string, projectId: string) => void;
   readonly openFile: (environmentId: string, threadId: string, path: string, line: number | null) => void;
-  readonly openChanges: (environmentId: string, threadId: string, path: string | null) => void;
+  /** The thread's changes, a turn's when the view named one whose checkpoints it knows. */
+  readonly openChanges: (
+    environmentId: string,
+    threadId: string,
+    path: string | null,
+    turn: TurnCheckpoints | null,
+  ) => void;
   /**
    * Whether threads of the mounted thread's lineage are working, as its
    * projection knows them: its subagents' from its roster, its own when it is
@@ -46,6 +53,18 @@ export interface ThreadViewHost {
   readonly colorScheme: () => "light" | "dark";
   /** Calls `listener` when `colorScheme` changes; returns its removal. */
   readonly onDidChangeColorScheme: (listener: () => void) => () => void;
+}
+
+/**
+ * A turn's diff, as `turnCheckpoints.ts` reads it from the thread's
+ * projection: its number, the checkpoint refs before and after it, and its
+ * files with their line counts.
+ */
+export interface TurnCheckpoints {
+  readonly turnCount: number;
+  readonly fromRef: string;
+  readonly toRef: string;
+  readonly files: ReadonlyArray<{ readonly path: string; readonly additions: number; readonly deletions: number }>;
 }
 
 let current: ThreadViewHost | undefined;
