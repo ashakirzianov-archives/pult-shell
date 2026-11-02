@@ -11,6 +11,7 @@ import {
 } from "@codingame/monaco-vscode-api";
 import { Codicon } from "@codingame/monaco-vscode-api/vscode/vs/base/common/codicons";
 import { Emitter, Event } from "@codingame/monaco-vscode-api/vscode/vs/base/common/event";
+import type { ThemeIcon } from "@codingame/monaco-vscode-api/vscode/vs/base/common/themables";
 // The package ships `observable`'s types only; its parts are modules of their own.
 import { constObservable } from "@codingame/monaco-vscode-api/vscode/vs/base/common/observableInternal/observables/constObservable";
 import { observableValue } from "@codingame/monaco-vscode-api/vscode/vs/base/common/observableInternal/observables/observableValue";
@@ -21,6 +22,7 @@ import type { ITextModel } from "@codingame/monaco-vscode-api/vscode/vs/editor/c
 import { Action2, MenuId, registerAction2 } from "@codingame/monaco-vscode-api/vscode/vs/platform/actions/common/actions";
 import { CommandsRegistry } from "@codingame/monaco-vscode-api/vscode/vs/platform/commands/common/commands";
 import { ContextKeyExpr } from "@codingame/monaco-vscode-api/vscode/vs/platform/contextkey/common/contextkey";
+import { registerColor } from "@codingame/monaco-vscode-api/vscode/vs/platform/theme/common/colorUtils";
 import type {
   ISCMProvider,
   ISCMRepository,
@@ -37,6 +39,7 @@ import { onDidSelectThread, selectedThread, selectThread, type ThreadSelection }
 import { threadStore } from "../threads/store.ts";
 import { type ChangeType, patchFiles } from "./patch.ts";
 import { changesServer } from "./server.ts";
+import "./changes.css";
 
 /** The scheme of a change's two sides, served by the view's content provider from the server's file contents RPC. */
 const DIFF_SCHEME = "pult-diff";
@@ -73,12 +76,24 @@ const GROUPS: ReadonlyArray<{ readonly id: string; readonly label: string; reado
   { id: "working-tree", label: "Working Tree", kind: "working-tree" },
 ];
 
-const BADGES: Record<ChangeType, { readonly badge: string; readonly color: string; readonly label: string }> = {
-  change: { badge: "M", color: "gitDecoration.modifiedResourceForeground", label: "Modified" },
-  new: { badge: "A", color: "gitDecoration.addedResourceForeground", label: "Added" },
-  deleted: { badge: "D", color: "gitDecoration.deletedResourceForeground", label: "Deleted" },
-  "rename-pure": { badge: "R", color: "gitDecoration.renamedResourceForeground", label: "Renamed" },
-  "rename-changed": { badge: "R", color: "gitDecoration.renamedResourceForeground", label: "Renamed and modified" },
+// The badges' colours, which VS Code's git extension registers and this build does not run: its defaults, which themes override.
+registerColor("gitDecoration.modifiedResourceForeground", { dark: "#E2C08D", light: "#895503", hcDark: "#E2C08D", hcLight: "#895503" }, "Modified files in the changes view.");
+registerColor("gitDecoration.addedResourceForeground", { dark: "#81B88B", light: "#587C0C", hcDark: "#A1E3AD", hcLight: "#374E06" }, "Added files in the changes view.");
+registerColor("gitDecoration.deletedResourceForeground", { dark: "#C74E39", light: "#AD0707", hcDark: "#C74E39", hcLight: "#AD0707" }, "Deleted files in the changes view.");
+registerColor("gitDecoration.renamedResourceForeground", { dark: "#73C991", light: "#007100", hcDark: "#73C991", hcLight: "#007100" }, "Renamed files in the changes view.");
+
+/** A change's badge through the decorations service, and its icon in the turn's group, whose rows the service does not badge. */
+const BADGES: Record<ChangeType, { readonly badge: string; readonly icon: ThemeIcon; readonly color: string; readonly label: string }> = {
+  change: { badge: "M", icon: Codicon.diffModified, color: "gitDecoration.modifiedResourceForeground", label: "Modified" },
+  new: { badge: "A", icon: Codicon.diffAdded, color: "gitDecoration.addedResourceForeground", label: "Added" },
+  deleted: { badge: "D", icon: Codicon.diffRemoved, color: "gitDecoration.deletedResourceForeground", label: "Deleted" },
+  "rename-pure": { badge: "R", icon: Codicon.diffRenamed, color: "gitDecoration.renamedResourceForeground", label: "Renamed" },
+  "rename-changed": {
+    badge: "R",
+    icon: Codicon.diffRenamed,
+    color: "gitDecoration.renamedResourceForeground",
+    label: "Renamed and modified",
+  },
 };
 
 class ChangeResource implements ISCMResource {
@@ -99,9 +114,13 @@ class ChangeResource implements ISCMResource {
     this.sourceUri = view.fileUri(change);
     this.multiDiffEditorOriginalUri = sides.original;
     this.multiDiffEditorModifiedUri = sides.modified;
+    const { icon, color, label } = BADGES[change.changeType];
+    // A turn's files are history: a badge through the decorations service would mark the live files in the explorer too.
+    const turnIcon = change.sourceKind === "turn" ? { ...icon, color: { id: color } } : undefined;
     this.decorations = {
       strikeThrough: change.changeType === "deleted",
-      tooltip: `${BADGES[change.changeType].label}, +${change.additions} −${change.deletions}`,
+      tooltip: `${label}, +${change.additions} −${change.deletions}`,
+      ...(turnIcon === undefined ? {} : { icon: turnIcon, iconDark: turnIcon }),
     };
   }
 
