@@ -473,17 +473,17 @@ html:not([data-theme-id]) .pult-thread-view {
   padding-inline: var(--pult-bar-item-padding);
   border-inline-width: 0;
   font-weight: var(--font-weight-medium);
-  color: color-mix(in oklab, var(--foreground) 80%, transparent);
+  color: color-mix(in oklab, var(--color-foreground) 80%, transparent);
 }
 
 .pult-composer-bar [data-slot="composer-context-strip"] button:hover {
-  color: var(--foreground);
+  color: var(--color-foreground);
 }
 
 .pult-composer-bar [data-slot="composer-context-strip"] :is(button, span[data-composer-context-control]) svg {
   width: 1rem;
   height: 1rem;
-  color: var(--muted-foreground);
+  color: var(--color-muted-foreground);
 }
 
 /* With its settings and buttons in the bar, the composer is its message
