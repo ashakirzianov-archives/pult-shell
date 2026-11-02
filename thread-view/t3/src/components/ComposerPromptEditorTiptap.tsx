@@ -111,6 +111,7 @@ import { SkillChipPopover, skillPopoverDescription } from "./chat/SkillInlineTex
 import {
   ComposerCitationBlock,
   ComposerReviewCommentBlock,
+  ComposerCitationCaretExtension,
   enterComposerCitationByKey,
 } from "./chat/ComposerCitationBlock";
 import { isPullRequestSummaryContext } from "~/lib/composerContextRecords";
@@ -785,6 +786,7 @@ function createComposerExtensions(richText: boolean) {
     ComposerMentionExtension,
     ComposerSkillExtension,
     ComposerCitationExtension,
+    ComposerCitationCaretExtension,
     ComposerContextReferenceExtension,
     ComposerMarkersExtension,
     ...(richText

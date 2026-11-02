@@ -552,3 +552,31 @@ html:not([data-theme-id]) .pult-thread-view {
   /* ProseMirror's own stylesheet pins its separators inline. */
   display: none !important;
 }
+
+/* So the caret beside a citation, which those hidden breaks would carry, is
+   a blinking bar above or below the block (`ComposerCitationCaretExtension`),
+   the editor's own caret hidden meanwhile. */
+.pult-thread-view .ProseMirror[data-caret-at-citation] {
+  caret-color: transparent;
+}
+.pult-thread-view .ProseMirror:focus [data-citation-caret] [data-composer-citation-chip]::before {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  height: 2px;
+  border-radius: 1px;
+  background: currentColor;
+  pointer-events: none;
+  animation: pult-citation-caret 1.06s steps(1) infinite;
+}
+.pult-thread-view .ProseMirror [data-citation-caret="before"] [data-composer-citation-chip]::before {
+  top: 0;
+}
+.pult-thread-view .ProseMirror [data-citation-caret="after"] [data-composer-citation-chip]::before {
+  bottom: 0;
+}
+@keyframes pult-citation-caret {
+  50% {
+    opacity: 0;
+  }
+}
