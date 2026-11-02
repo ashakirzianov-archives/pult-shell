@@ -27,9 +27,9 @@ export function BarTip({ label, children }: { label: string; children: ReactElem
  * The thread's place, as entries of its pane's composer bar, which the
  * thread view provides (`ThreadViewMounts`): Explorer, an icon button that
  * opens the Explorer tab narrowed to the thread's root (a note when the
- * thread has none), and after the view's branch entry
- * (`thread-view/shell/BranchEntry.tsx`), the environment, an icon whose name
- * shows in a tooltip. The bar orders its entries by their
+ * thread has none), Source Control, one that opens the changes view narrowed
+ * to the thread's checkout (`pult-shell.showChanges`), and the environment,
+ * an icon whose name shows in a tooltip. The bar orders its entries by their
  * `data-chat-composer-slot-item`.
  */
 export function ThreadBarEntries({ bar, environmentId, threadId }: { bar: HTMLElement; environmentId: string; threadId: string }) {
@@ -39,6 +39,8 @@ export function ThreadBarEntries({ bar, environmentId, threadId }: { bar: HTMLEl
   const held = state.environments.find((candidate) => candidate.id === environmentId);
   const environment =
     held === undefined ? null : `Environment: ${held.label}${held.name === held.label ? "" : ` (${held.name})`}`;
+  const run = (command: string, ...args: unknown[]) =>
+    void getService(ICommandService).then((commands) => commands.executeCommand(command, ...args));
   return (
     <>
       {createPortal(
@@ -51,9 +53,21 @@ export function ThreadBarEntries({ bar, environmentId, threadId }: { bar: HTMLEl
                 type="button"
                 className="pult-bar-entry pult-bar-button"
                 aria-label="Explorer"
-                onClick={() => void getService(ICommandService).then((commands) => commands.executeCommand("pult-shell.openThreadExplorer"))}
+                onClick={() => run("pult-shell.openThreadExplorer")}
               >
                 <i className="codicon codicon-files" aria-hidden />
+              </button>
+            </BarTip>
+          )}
+          {thread.checkoutRoot === null ? null : (
+            <BarTip label="Source Control">
+              <button
+                type="button"
+                className="pult-bar-entry pult-bar-button"
+                aria-label="Source Control"
+                onClick={() => run("pult-shell.showChanges", environmentId, threadId, null)}
+              >
+                <i className="codicon codicon-source-control" aria-hidden />
               </button>
             </BarTip>
           )}
