@@ -94,32 +94,87 @@ function citationAhead(view: EditorView, $pos: ResolvedPos, lineBelow = false): 
 }
 
 /**
- * The editor's side of the block's keys. Backspace and Left (or Up from the
- * line below) into a block enter its comment at the end, Delete and Right (or
- * Down from the line above) at the start. With Shift, and Option or not, the
- * same keys extend the selection over the block alone, Option+Up and
- * Option+Down off a line's edge left to the platform. Returns whether it
- * handled the key.
+ * The editor's side of the block's keys. A block moves as one character:
+ * deleting into it edits it, Backspace entering its comment at the end and
+ * Delete at the start; Left and Right, and Up and Down from the line beside
+ * it, step over it (`visibleCaret`), doing nothing where no caret shows past
+ * it. With Shift, and Option or not, the arrows extend the selection over the
+ * block alone, Option+Up and Option+Down off a line's edge left to the
+ * platform. Returns whether it handled the key.
  */
 export function enterComposerCitationByKey(view: EditorView, event: KeyboardEvent): boolean {
   if (event.metaKey || event.ctrlKey || event.isComposing) return false;
   if (event.shiftKey) return extendOverCitation(view, event);
   if (event.altKey || !view.state.selection.empty) return false;
   const { $from } = view.state.selection;
-  const target =
-    event.key === "Backspace" || event.key === "ArrowLeft"
-      ? { pos: citationBehind(view, $from), edge: "end" as const }
-      : event.key === "ArrowUp" && view.endOfTextblock("up")
-        ? { pos: citationBehind(view, $from, true), edge: "end" as const }
-        : event.key === "Delete" || event.key === "ArrowRight"
-          ? { pos: citationAhead(view, $from), edge: "start" as const }
-          : event.key === "ArrowDown" && view.endOfTextblock("down")
-            ? { pos: citationAhead(view, $from, true), edge: "start" as const }
-            : null;
-  if (target?.pos == null || !focusCitationComment(view, target.pos, target.edge)) return false;
-  event.preventDefault();
-  event.stopPropagation();
-  return true;
+  const { doc } = view.state;
+  const handled = () => {
+    event.preventDefault();
+    event.stopPropagation();
+    return true;
+  };
+  if (event.key === "Backspace" || event.key === "Delete") {
+    const back = event.key === "Backspace";
+    const pos = back ? citationBehind(view, $from) : citationAhead(view, $from);
+    if (pos === null || !focusCitationComment(view, pos, back ? "end" : "start")) return false;
+    return handled();
+  }
+  const vertical = event.key === "ArrowUp" || event.key === "ArrowDown";
+  if (vertical && !view.endOfTextblock(event.key === "ArrowUp" ? "up" : "down")) return false;
+  let target: number | null;
+  if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+    const pos = citationBehind(view, $from, vertical);
+    if (pos === null) return false;
+    target = visibleCaret(doc, pos, -1);
+  } else if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+    const pos = citationAhead(view, $from, vertical);
+    if (pos === null) return false;
+    target = visibleCaret(doc, pos + doc.nodeAt(pos)!.nodeSize, 1);
+  } else {
+    return false;
+  }
+  if (target !== null) {
+    if (vertical) target = inCaretColumn(view, target, event.key === "ArrowUp" ? -1 : 1);
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(doc, target)).scrollIntoView());
+  }
+  return handled();
+}
+
+/**
+ * The first caret the editor draws from `pos` on, going back (-1) or forward
+ * (1): `pos` itself, else past the blocks and the line breaks beside them,
+ * whose carets are hidden; null when none is left that way.
+ */
+function visibleCaret(doc: ProseMirrorNode, pos: number, dir: -1 | 1): number | null {
+  for (;;) {
+    if (hiddenCaretAt(doc, pos) === null) return pos;
+    const $pos = doc.resolve(pos);
+    const node = dir < 0 ? $pos.nodeBefore : $pos.nodeAfter;
+    if (isCitation(node)) pos += dir * node.nodeSize;
+    else if (dir < 0 && $pos.index(0) > 0) pos = $pos.before(1) - 1;
+    else if (dir > 0 && $pos.index(0) < doc.childCount - 1) pos = $pos.after(1) + 1;
+    else return null;
+  }
+}
+
+/**
+ * The caret on `pos`'s visual row nearest the selection head's column, for
+ * Up (-1) or Down (1) over a block; `pos` itself when the row's caret would
+ * land elsewhere.
+ */
+function inCaretColumn(view: EditorView, pos: number, dir: -1 | 1): number {
+  const { doc, selection } = view.state;
+  const row = view.coordsAtPos(pos);
+  const found = view.posAtCoords({
+    left: view.coordsAtPos(selection.head).left,
+    top: (row.top + row.bottom) / 2,
+  });
+  if (found === null) return pos;
+  const $found = doc.resolve(found.pos);
+  const $pos = doc.resolve(pos);
+  const sameLine = $found.depth === 1 && $pos.depth === 1 && $found.index(0) === $pos.index(0);
+  const onSide = dir < 0 ? found.pos <= pos : found.pos >= pos;
+  return sameLine && onSide && hiddenCaretAt(doc, found.pos) === null ? found.pos : pos;
 }
 
 /** Whether the selection's head is on its line's first or last visual row; the editor's own check reads the selection's start or end. */
@@ -156,33 +211,36 @@ function extendOverCitation(view: EditorView, event: KeyboardEvent): boolean {
 }
 
 /**
- * The block beside a caret the editor cannot draw: at a line's start before a
+ * The block beside a caret at `pos` the editor cannot draw: at a line's start before a
  * block, or at its end after one, the line having no text on that side and
  * the line break ProseMirror would draw it on hidden (`shell.css`). The last
  * line keeps its break.
  */
-function citationAtHiddenCaret(view: EditorView): { pos: number; edge: Edge } | null {
-  const { selection, doc } = view.state;
-  const { $from } = selection;
-  if (!selection.empty || $from.depth !== 1) return null;
-  if ($from.parentOffset === 0 && isCitation($from.nodeAfter)) {
-    return { pos: $from.pos, edge: "start" };
+function hiddenCaretAt(doc: ProseMirrorNode, pos: number): { pos: number; edge: Edge } | null {
+  const $pos = doc.resolve(pos);
+  if ($pos.depth !== 1) return null;
+  if ($pos.parentOffset === 0 && isCitation($pos.nodeAfter)) {
+    return { pos, edge: "start" };
   }
-  const before = $from.nodeBefore;
+  const before = $pos.nodeBefore;
   if (
     isCitation(before) &&
-    $from.parentOffset === $from.parent.content.size &&
-    $from.index(0) < doc.childCount - 1
+    $pos.parentOffset === $pos.parent.content.size &&
+    $pos.index(0) < doc.childCount - 1
   ) {
-    return { pos: $from.pos - before.nodeSize, edge: "end" };
+    return { pos: pos - before.nodeSize, edge: "end" };
   }
   return null;
 }
 
-/** Dispatches a caret move and focuses the editor, or the block's comment where the caret would not show. */
+/**
+ * Dispatches a caret move and focuses the editor, or the block's comment
+ * where the caret would not show, as deleting into a block does.
+ */
 function placeCaret(view: EditorView, tr: Transaction) {
   view.dispatch(tr.scrollIntoView());
-  const hidden = citationAtHiddenCaret(view);
+  const { selection, doc } = view.state;
+  const hidden = selection.empty ? hiddenCaretAt(doc, selection.from) : null;
   if (hidden && focusCitationComment(view, hidden.pos, hidden.edge)) return;
   view.focus();
 }
@@ -259,8 +317,13 @@ function CitationBlock({
     onSave(next);
   };
 
-  /** Removes the citation, and its line when it stood alone on one. */
-  const remove = (focus: boolean) => {
+  /**
+   * Removes the citation, and its line when it stood alone on one. With
+   * `caret`, the editor's caret goes where it stood, going back (-1) or
+   * forward (1): with `deleting`, into a block met there as deleting into
+   * it does, else past any blocks there.
+   */
+  const remove = (caret?: { dir: -1 | 1; deleting: boolean }) => {
     if (!editor.isEditable) return;
     const found = findCitation(editor, matches);
     if (!found) return;
@@ -270,21 +333,27 @@ function CitationBlock({
     const from = alone ? $pos.before(1) : found.pos;
     const to = alone ? $pos.after(1) : found.pos + found.node.nodeSize;
     const tr = editor.state.tr.delete(from, to);
-    // Without focus the caret is wherever the user put it, mapped past the deletion.
-    if (focus) tr.setSelection(Selection.near(tr.doc.resolve(Math.min(from, tr.doc.content.size)), -1));
-    if (focus) placeCaret(editor.view, tr);
-    else editor.view.dispatch(tr);
+    if (caret) {
+      const near = Selection.near(tr.doc.resolve(Math.min(from, tr.doc.content.size)), caret.dir);
+      const past = caret.deleting ? null : visibleCaret(tr.doc, near.from, caret.dir);
+      tr.setSelection(past === null ? near : TextSelection.create(tr.doc, past));
+      placeCaret(editor.view, tr);
+    } else {
+      // Without focus the caret is wherever the user put it, mapped past the deletion.
+      editor.view.dispatch(tr);
+    }
     onRemoved?.();
   };
 
   /**
-   * Puts the editor's caret before or after the block, off its line when it
-   * has one; with `newLine`, on an empty line after it, the next line when
-   * that is empty, else a new one.
+   * Puts the editor's caret before or after the block, past any blocks
+   * beside it and off their lines (`visibleCaret`), staying in the field
+   * where no caret shows that way; with `newLine`, on an empty line after
+   * it, the next line when that is empty, else a new one.
    */
   const leave = (side: "before" | "after", newLine = false) => {
     if (comment.trim() === "") {
-      remove(true);
+      remove({ dir: side === "before" ? -1 : 1, deleting: false });
       return;
     }
     const found = findCitation(editor, matches);
@@ -296,18 +365,10 @@ function CitationBlock({
     const lineIndex = $pos.index(0);
     const atLineEnd = $pos.depth === 1 && end === $pos.end();
     const next = lineIndex < doc.childCount - 1 ? doc.child(lineIndex + 1) : null;
-    if (side === "before") {
-      tr.setSelection(
-        $pos.depth === 1 && found.pos === $pos.start() && lineIndex > 0
-          ? Selection.near(doc.resolve($pos.before(1)), -1)
-          : TextSelection.create(doc, found.pos),
-      );
-    } else if (!newLine || $pos.depth !== 1) {
-      tr.setSelection(
-        atLineEnd && next
-          ? Selection.near(doc.resolve($pos.after(1)), 1)
-          : TextSelection.create(doc, end),
-      );
+    if (side === "before" || !newLine || $pos.depth !== 1) {
+      const target = side === "before" ? visibleCaret(doc, found.pos, -1) : visibleCaret(doc, end, 1);
+      if (target === null) return;
+      tr.setSelection(TextSelection.create(doc, target));
     } else if (atLineEnd && next?.type.name === "paragraph" && next.content.size === 0) {
       tr.setSelection(TextSelection.create(doc, $pos.after(1) + 1));
     } else {
@@ -343,7 +404,7 @@ function CitationBlock({
     }
     if ((event.key === "Backspace" && atStart) || (event.key === "Delete" && atEnd)) {
       return handle(() => {
-        if (input.value === "") remove(true);
+        if (input.value === "") remove({ dir: event.key === "Backspace" ? -1 : 1, deleting: true });
       });
     }
   };
@@ -374,7 +435,7 @@ function CitationBlock({
           const input = event.currentTarget;
           // A window losing focus keeps its active element; only a move within the page leaves.
           if (!input.isConnected || document.activeElement === input) return;
-          if (input.value.trim() === "") remove(false);
+          if (input.value.trim() === "") remove();
         }}
       />
       {tooLong ? (
