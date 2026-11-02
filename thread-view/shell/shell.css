@@ -453,7 +453,8 @@ html:not([data-theme-id]) .pult-thread-view {
 
 /* Its environment, checkout and branch pickers in the model picker's look
    (upstream's larger composer control, as the bar pads it): its height,
-   weight, colour and gap, the icons its size and muted; the bar's gap
+   weight, colour and gap, the icons its size in the bar's icon colour, as
+   access and attach draw theirs; the bar's gap
    between them in place of the separator. */
 .pult-composer-bar [data-slot="composer-context-strip"] {
   gap: var(--pult-bar-gap);
@@ -483,7 +484,7 @@ html:not([data-theme-id]) .pult-thread-view {
 .pult-composer-bar [data-slot="composer-context-strip"] :is(button, span[data-composer-context-control]) svg {
   width: 1rem;
   height: 1rem;
-  color: var(--color-muted-foreground);
+  color: var(--vscode-icon-foreground);
 }
 
 /* With its settings and buttons in the bar, the composer is its message
