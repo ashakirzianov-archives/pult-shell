@@ -1,6 +1,7 @@
-import { getService, ICommandService, IPaneCompositePartService, IWorkbenchLayoutService } from "@codingame/monaco-vscode-api";
+import { getService, ICommandService, IPaneCompositePartService, IStorageService, IWorkbenchLayoutService } from "@codingame/monaco-vscode-api";
 import { Direction, type Grid, type IView } from "@codingame/monaco-vscode-api/vscode/vs/base/browser/ui/grid/grid";
 import { Event } from "@codingame/monaco-vscode-api/vscode/vs/base/common/event";
+import { StorageScope, StorageTarget } from "@codingame/monaco-vscode-api/vscode/vs/platform/storage/common/storage";
 import { ViewContainerLocation } from "@codingame/monaco-vscode-api/vscode/vs/workbench/common/views";
 import { Parts } from "@codingame/monaco-vscode-api/vscode/vs/workbench/services/layout/browser/layoutService";
 import { createRoot } from "react-dom/client";
@@ -85,11 +86,17 @@ function PanelFooter({ store }: { store: PanelTabStore }) {
  * grid with the grid's own `addView` and shown with the part, so a
  * collapsed panel leaves no column behind. While the panel is collapsed,
  * Expand Panel sits at the window's top-left over the room the top-left
- * editor group's tabs row leaves it (`src/style.css`). Started once the
- * workbench is up.
+ * editor group's tabs row leaves it (`src/style.css`). Collapsing or
+ * expanding saves the workbench's state at once, so the next start keeps it,
+ * and the panel keeps its width while collapsed (`keepPanelWidth`). Started
+ * once the workbench is up.
  */
 export async function startPanelRows(): Promise<void> {
-  const [layout, panes] = await Promise.all([getService(IWorkbenchLayoutService), getService(IPaneCompositePartService)]);
+  const [layout, panes, storage] = await Promise.all([
+    getService(IWorkbenchLayoutService),
+    getService(IPaneCompositePartService),
+    getService(IStorageService),
+  ]);
   const { workbenchGrid, sideBarPartView } = layout as unknown as Partial<LayoutGrid>;
   const title = sideBarPartView?.element.querySelector<HTMLElement>(":scope > .composite.title");
   if (workbenchGrid === undefined || sideBarPartView === undefined || title === null || title === undefined) return;
@@ -122,10 +129,42 @@ export async function startPanelRows(): Promise<void> {
     sideBarPartView.element.classList.toggle(HEADER_IN_TITLE, panes.getActivePaneComposite(ViewContainerLocation.Sidebar)?.getId() === PANEL_ID);
     workbenchGrid.setViewVisible(footer, layout.isVisible(Parts.SIDEBAR_PART));
   };
+  const expandToWidth = keepPanelWidth(layout, storage, sideBarPartView);
   layout.onDidChangePartVisibility((event) => {
-    if (event.partId === Parts.SIDEBAR_PART) follow();
+    if (event.partId !== Parts.SIDEBAR_PART) return;
+    follow();
+    if (event.visible) expandToWidth();
+    // The layout stores the part's visibility only when the workbench saves its state (at intervals, and at shutdown,
+    // which a page's close or reload may not finish): saved now, the next start shows the panel as it was left.
+    void storage.flush();
   });
   panes.onDidPaneCompositeOpen(follow);
   panes.onDidPaneCompositeClose(follow);
   follow();
+}
+
+/**
+ * The panel's width while it is collapsed. The bottom row puts the sidebar
+ * part in a column of the grid, so the layout saves a collapsed part's
+ * cached size along that column, its height, as its width, and a panel
+ * collapsed at start loses its width to the row's `addView`. The last width
+ * the panel showed at is kept here, saved in the layout's place while
+ * collapsed, and applied by the returned function on expanding; a saved
+ * width over half the window, the layout's own mistake, gives way to the
+ * layout's default.
+ */
+function keepPanelWidth(layout: IWorkbenchLayoutService, storage: IStorageService, sideBarPartView: IView): () => void {
+  // The layout's own key for the part's width (`LayoutStateKeys.SIDEBAR_SIZE`).
+  const key = "workbench.sideBar.size";
+  const containerWidth = layout.mainContainerDimension.width;
+  const saved = storage.getNumber(key, StorageScope.PROFILE);
+  let width = saved !== undefined && saved <= containerWidth / 2 ? saved : Math.min(300, containerWidth / 4);
+  new ResizeObserver(() => {
+    if (layout.isVisible(Parts.SIDEBAR_PART) && sideBarPartView.element.offsetWidth > 0) width = sideBarPartView.element.offsetWidth;
+  }).observe(sideBarPartView.element);
+  // After the layout's own listener, registered as the workbench started.
+  storage.onWillSaveState(() => {
+    if (!layout.isVisible(Parts.SIDEBAR_PART)) storage.store(key, width, StorageScope.PROFILE, StorageTarget.MACHINE);
+  });
+  return () => layout.setSize(Parts.SIDEBAR_PART, { width, height: layout.getSize(Parts.SIDEBAR_PART).height });
 }
