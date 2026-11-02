@@ -458,35 +458,36 @@
   list-style: none;
 }
 
-/* The Explorer tab's filter (src/panel/filterCard.tsx), a card of the
-   shell's own before the file view's tree, the body laid out as a column
-   so the tree takes what is left, and is laid out again for it. The card's
-   lines are the thread cards'. */
-.pane-body:has(> .pult-explorer-filter) {
+/* A stock view's filter (src/panel/filterCard.tsx), the Explorer tab's and
+   Source Control's, a card of the shell's own before the view's tree, the
+   body laid out as a column so the tree takes what is left, and is laid out
+   again for it. The card's lines are the thread cards'. */
+.pane-body:has(> .pult-view-filter) {
   display: flex;
   flex-direction: column;
 }
 
-.pane-body:has(> .pult-explorer-filter) > .explorer-folders-view {
+.pane-body:has(> .pult-view-filter) > .explorer-folders-view,
+.pane-body:has(> .pult-view-filter) > .scm-view {
   flex: 1;
   min-height: 0;
 }
 
-.pult-explorer-filter {
+.pult-view-filter {
   flex: none;
   padding: 2px 8px 6px;
 }
 
-.pult-explorer-filter:empty {
+.pult-view-filter:empty {
   display: none;
 }
 
-.pult-explorer-card,
-.pult-explorer-card * {
+.pult-view-card,
+.pult-view-card * {
   box-sizing: border-box;
 }
 
-.pult-explorer-card {
+.pult-view-card {
   display: block;
   padding: 7px 10px 8px;
   border-radius: 8px;
@@ -495,7 +496,7 @@
   background: var(--vscode-list-inactiveSelectionBackground, color-mix(in srgb, var(--vscode-descriptionForeground) 14%, transparent));
 }
 
-.pult-explorer-card-clear.codicon {
+.pult-view-card-clear.codicon {
   flex: none;
   display: flex;
   align-items: center;
@@ -513,12 +514,12 @@
   opacity: 0;
 }
 
-.pult-explorer-card:hover .pult-explorer-card-clear,
-.pult-explorer-card-clear:focus-visible {
+.pult-view-card:hover .pult-view-card-clear,
+.pult-view-card-clear:focus-visible {
   opacity: 1;
 }
 
-.pult-explorer-card-clear.codicon:hover {
+.pult-view-card-clear.codicon:hover {
   background: var(--vscode-toolbar-hoverBackground);
 }
 

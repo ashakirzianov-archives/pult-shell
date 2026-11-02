@@ -1,6 +1,7 @@
 import {
   getService,
   ICommandService,
+  IContextKeyService,
   IDecorationsService,
   IEditorService,
   ILanguageService,
@@ -21,7 +22,7 @@ import { URI } from "@codingame/monaco-vscode-api/vscode/vs/base/common/uri";
 import type { ITextModel } from "@codingame/monaco-vscode-api/vscode/vs/editor/common/model";
 import { Action2, MenuId, registerAction2 } from "@codingame/monaco-vscode-api/vscode/vs/platform/actions/common/actions";
 import { CommandsRegistry } from "@codingame/monaco-vscode-api/vscode/vs/platform/commands/common/commands";
-import { ContextKeyExpr } from "@codingame/monaco-vscode-api/vscode/vs/platform/contextkey/common/contextkey";
+import { ContextKeyExpr, type IContextKey } from "@codingame/monaco-vscode-api/vscode/vs/platform/contextkey/common/contextkey";
 import { registerColor } from "@codingame/monaco-vscode-api/vscode/vs/platform/theme/common/colorUtils";
 import type {
   ISCMProvider,
@@ -36,10 +37,11 @@ import type { TurnCheckpoints } from "../../thread-view/shell/main.tsx";
 
 import { pultUri } from "../panel/explorer.ts";
 import { onDidSelectThread, selectedThread, selectThread, type ThreadSelection } from "../threads/selection.ts";
+import { threadProjectIcon } from "../threads/projectIcon.ts";
 import { threadStore } from "../threads/store.ts";
 import { type ChangeType, patchFiles } from "./patch.ts";
 import { changesServer } from "./server.ts";
-import "./changes.css";
+import { mountTurnCard, setTurnCard } from "./turnCard.tsx";
 
 /** The scheme of a change's two sides, served by the view's content provider from the server's file contents RPC. */
 const DIFF_SCHEME = "pult-diff";
@@ -68,8 +70,10 @@ interface Side {
   readonly side: "old" | "new";
 }
 
-/** The group of a turn the thread view named, above the server's sources, while the selected thread has one. */
+/** The group of a turn the thread view named, alone in the view while the selected thread has one. */
 const TURN_GROUP = "turn";
+/** The context key set while the view shows a turn, for "Pult: Close Turn Changes". */
+const TURN_SHOWN_KEY = "pult.turnChangesShown";
 
 const GROUPS: ReadonlyArray<{ readonly id: string; readonly label: string; readonly kind: ReviewDiffPreviewSourceKind }> = [
   { id: "changes", label: "Changes", kind: "branch-range" },
@@ -134,8 +138,8 @@ class ChangesGroup implements ISCMResourceGroup {
   contextValue: string | undefined = undefined;
   readonly hideWhenEmpty = true;
   readonly multiDiffEditorEnableViewChanges = false;
-  private readonly labelChanged = new Emitter<void>();
-  readonly onDidChange = this.labelChanged.event;
+  // The label never changes.
+  readonly onDidChange = Event.None;
   private readonly resourcesChanged = new Emitter<void>();
   readonly onDidChangeResources = this.resourcesChanged.event;
   private tree: ResourceTree<ChangeResource, ChangesGroup> | undefined;
@@ -143,7 +147,7 @@ class ChangesGroup implements ISCMResourceGroup {
   constructor(
     readonly provider: ChangesProvider,
     readonly id: string,
-    public label: string,
+    readonly label: string,
     private readonly extUri: IExtUri,
   ) {}
 
@@ -156,18 +160,13 @@ class ChangesGroup implements ISCMResourceGroup {
     return this.tree;
   }
 
-  set(resources: ReadonlyArray<ChangeResource>, label = this.label): void {
-    if (label !== this.label) {
-      this.label = label;
-      this.labelChanged.fire();
-    }
+  set(resources: ReadonlyArray<ChangeResource>): void {
     this.resources = resources;
     this.tree = undefined;
     this.resourcesChanged.fire();
   }
 
   dispose(): void {
-    this.labelChanged.dispose();
     this.resourcesChanged.dispose();
   }
 }
@@ -201,7 +200,7 @@ class ChangesProvider implements ISCMProvider {
     extUri: IExtUri,
   ) {
     this.groups = [
-      new ChangesGroup(this, TURN_GROUP, "Turn", extUri),
+      new ChangesGroup(this, TURN_GROUP, "Changed Files", extUri),
       ...GROUPS.map(({ id, label }) => new ChangesGroup(this, id, label, extUri)),
     ];
   }
@@ -233,6 +232,7 @@ type Services = {
   readonly editors: IEditorService;
   readonly commands: ICommandService;
   readonly extUri: IExtUri;
+  readonly turnShown: IContextKey<boolean>;
 };
 
 /**
@@ -242,12 +242,13 @@ type Services = {
  * server's two diff sources as its groups, Changes (the branch against its
  * base) and Working Tree; a resource opens VS Code's diff editor, its old
  * side from the server, its new side the live `pult:` file, or the server's
- * for a deleted file or a committed change. Above them, while the selected
- * thread has one, a turn's group, "Turn N": the turn the thread view's
- * changed files card last opened for the thread, both sides of each file
- * from the turn's checkpoints, until the group's Close. It follows the
- * shell's selection, and refreshes when the thread's latest run finishes
- * and on "Pult: Refresh Changes".
+ * for a deleted file or a committed change. While the selected thread has
+ * one, a turn instead, its files alone under Changed Files: the turn the
+ * thread view's changed files card last opened for the thread, both sides
+ * of each file from the turn's checkpoints, with the turn's card above the
+ * view's tree (`turnCard.tsx`) until its clear mark. It follows the shell's
+ * selection, and refreshes when the thread's latest run finishes and on
+ * "Pult: Refresh Changes".
  */
 class ChangesView {
   private repository:
@@ -263,6 +264,8 @@ class ChangesView {
   private readonly contents = new Map<string, Promise<{ readonly oldContents: string; readonly newContents: string }>>();
   /** Each thread's turn, by `turnKey`, kept while the page lives; a turn's checkpoints never change. */
   private readonly turns = new Map<string, Promise<Turn>>();
+  /** The turn the view shows, the selected thread's. */
+  private shownTurn: Turn | undefined;
   private failure: string | null = null;
   private readonly decorationsChanged = new Emitter<URI[]>();
 
@@ -270,7 +273,7 @@ class ChangesView {
 
   /** Starts following the selection and the store, with the `pult-diff:` sides and the badges registered. */
   static async start(): Promise<ChangesView> {
-    const [scm, models, languages, editors, commands, textModels, decorations, uriIdentity] = await Promise.all([
+    const [scm, models, languages, editors, commands, textModels, decorations, uriIdentity, contextKeys] = await Promise.all([
       getService(ISCMService),
       getService(IModelService),
       getService(ILanguageService),
@@ -279,8 +282,10 @@ class ChangesView {
       getService(ITextModelService),
       getService(IDecorationsService),
       getService(IUriIdentityService),
+      getService(IContextKeyService),
     ]);
-    const view = new ChangesView({ scm, models, languages, editors, commands, extUri: uriIdentity.extUri });
+    const turnShown = contextKeys.createKey(TURN_SHOWN_KEY, false);
+    const view = new ChangesView({ scm, models, languages, editors, commands, extUri: uriIdentity.extUri, turnShown });
     textModels.registerTextModelContentProvider(DIFF_SCHEME, {
       provideTextContent: async (uri) => {
         const text = await view.sideContents(uri);
@@ -387,22 +392,38 @@ class ChangesView {
     return this.turns.get(turnKey(selection));
   }
 
-  /** The turn's group shows the selected thread's turn, or hides. */
+  /** The view shows the selected thread's turn, or the server's sources when it has none. */
   private async applyTurn(): Promise<void> {
     const provider = this.repository?.provider;
     const selection = this.selection;
-    if (provider === undefined) return;
-    const group = provider.group(TURN_GROUP);
-    const turn = selection === null ? undefined : await this.turnOf(selection);
+    const loaded = selection === null ? undefined : await this.turnOf(selection);
     if (this.repository?.provider !== provider || this.selection !== selection) return;
-    if (turn === undefined || turn.root !== provider.root) return group.set([]);
-    group.set(
-      turn.changes.map((change) => new ChangeResource(group, change, this)),
-      `Turn ${turn.turnCount}`,
+    const turn = provider !== undefined && loaded?.root === provider.root ? loaded : undefined;
+    this.shownTurn = turn;
+    this.services.turnShown.set(turn !== undefined);
+    const thread = this.selected();
+    setTurnCard(
+      turn === undefined || thread === undefined
+        ? undefined
+        : { turnCount: turn.turnCount, threadTitle: thread.title, project: threadProjectIcon(thread) },
     );
+    this.renderGroups();
   }
 
-  /** The selected thread's turn forgotten, its group gone: the group's Close. */
+  /** The groups' resources: the shown turn's files alone, or the server's sources. */
+  private renderGroups(): void {
+    const provider = this.repository?.provider;
+    if (provider === undefined) return;
+    const turn = provider.group(TURN_GROUP);
+    turn.set((this.shownTurn?.changes ?? []).map((change) => new ChangeResource(turn, change, this)));
+    for (const { id, kind } of GROUPS) {
+      const group = provider.group(id);
+      const changes = this.shownTurn === undefined ? [...this.changes.values()].filter((change) => change.sourceKind === kind) : [];
+      group.set(changes.map((change) => new ChangeResource(group, change, this)));
+    }
+  }
+
+  /** The selected thread's turn forgotten, the view back to the server's sources: the card's clear mark. */
   closeTurn(): void {
     if (this.selection === null) return;
     this.turns.delete(turnKey(this.selection));
@@ -435,13 +456,12 @@ class ChangesView {
     this.changes = new Map();
     this.contents.clear();
     if (provider !== undefined) {
-      for (const { id, kind } of GROUPS) {
+      for (const { kind } of GROUPS) {
         const source = sources.find((candidate) => candidate.kind === kind);
         const changes = source === undefined ? [] : changesOf(provider.root, source);
         for (const change of changes) this.changes.set(`${kind}:${change.path}`, change);
-        const group = provider.group(id);
-        group.set(changes.map((change) => new ChangeResource(group, change, this)));
       }
+      this.renderGroups();
       // The badge counts files, not their appearances in both groups.
       provider.changed(new Set([...this.changes.values()].map((change) => change.path)).size);
     }
@@ -455,7 +475,7 @@ class ChangesView {
     const { original, modified } = this.sides(change);
     const group =
       change.sourceKind === "turn"
-        ? (this.repository?.provider.group(TURN_GROUP).label ?? "Turn")
+        ? `Turn ${this.shownTurn?.turnCount ?? ""}`.trim()
         : (GROUPS.find((candidate) => candidate.kind === change.sourceKind)?.label ?? "Changes");
     await this.services.editors.openEditor({
       original: { resource: original },
@@ -654,11 +674,13 @@ export async function changesState() {
  * The changes view, started once the workbench's services are up, with
  * `pult-shell.showChanges <environmentId|null> <threadId|null> <path|null> [turn]`,
  * "Pult: Refresh Changes" (`pult-shell.refreshChanges`, also in the Source
- * Control view's title) and the turn's group's Close
- * (`pult-shell.closeTurnChanges`).
+ * Control view's title), "Pult: Close Turn Changes"
+ * (`pult-shell.closeTurnChanges`, also the turn's card's clear mark) and the
+ * turn's card.
  */
 export function registerChanges(): void {
   started = ChangesView.start();
+  void mountTurnCard();
   started.catch((error: unknown) => console.error("[pult-shell] the changes view did not start", error));
   CommandsRegistry.registerCommand(
     "pult-shell.showChanges",
@@ -674,19 +696,10 @@ export function registerChanges(): void {
       constructor() {
         super({
           id: "pult-shell.closeTurnChanges",
-          title: { value: "Close Turn", original: "Close Turn" },
+          title: { value: "Close Turn Changes", original: "Close Turn Changes" },
           category: { value: "Pult", original: "Pult" },
-          icon: Codicon.close,
-          menu: [
-            {
-              id: MenuId.SCMResourceGroupContext,
-              group: "inline",
-              when: ContextKeyExpr.and(
-                ContextKeyExpr.equals("scmProvider", PROVIDER_ID),
-                ContextKeyExpr.equals("scmResourceGroup", TURN_GROUP),
-              ),
-            },
-          ],
+          f1: true,
+          precondition: ContextKeyExpr.has(TURN_SHOWN_KEY),
         });
       }
 
