@@ -1170,8 +1170,13 @@ export default function ChatView(props: ChatViewProps) {
   // onEnvironmentChange only retargets an unsent draft. envLocked alone does not
   // rule out a started thread: one whose machine is offline never loads its
   // messages, so it would otherwise be offered a machine picker that does nothing.
+  // Pult: with a slot for the composer's controls, a draft's environment is a picker even with one to pick.
+  const composerControlsSlot = use(ComposerControlsSlot);
   const canChangeEnvironment =
-    hasMultipleEnvironments && !envLocked && draftId !== null && !draftThread?.promotedTo;
+    (hasMultipleEnvironments || composerControlsSlot !== null) &&
+    !envLocked &&
+    draftId !== null &&
+    !draftThread?.promotedTo;
 
   const loadBalancingSettings = useClientSettings((settings) => ({
     loadBalancingEnabled: settings.loadBalancingEnabled,
@@ -1681,7 +1686,6 @@ export default function ChatView(props: ChatViewProps) {
     hostsRestingComposerControls: routeKind === "server" && restingComposerControlsVisible,
   });
   // Pult: with a slot for the composer's controls, the strips below the composer stay empty.
-  const composerControlsSlot = use(ComposerControlsSlot);
   const mountComposerModelStrip =
     routeKind === "server" &&
     !mountComposerContextStrip &&
