@@ -4,6 +4,8 @@ import {
   IContextKeyService,
   IDecorationsService,
   IEditorService,
+  IFileService,
+  IHostService,
   ILanguageService,
   IModelService,
   INotificationService,
@@ -61,6 +63,8 @@ const PROVIDER_ID = "pult-shell";
 const SCM_CONTAINER = "workbench.view.scm";
 /** How many checkouts' diffs a refresh asks for at once. */
 const REFRESH_CONCURRENCY = 4;
+/** How long the view waits after a file changes under a checkout before reading it again, so a burst of writes is one read. */
+const FILE_CHANGE_DELAY_MS = 300;
 /** Commits a checkout, the one its key names, else the filter's or a pick of those shown with uncommitted changes. */
 const COMMIT_COMMAND = "pult-shell.commit";
 
@@ -331,6 +335,9 @@ class ChangesView {
   private decorated = new Map<string, Change>();
   private readonly contents = new Map<string, Promise<{ readonly oldContents: string; readonly newContents: string }>>();
   private readonly decorationsChanged = new Emitter<URI[]>();
+  /** The checkouts a file changed under, read again together once the burst settles. */
+  private readonly stale = new Set<Entry>();
+  private staleTimer: ReturnType<typeof setTimeout> | undefined;
 
   private constructor(
     private readonly services: Services,
@@ -341,7 +348,7 @@ class ChangesView {
 
   /** Starts following the store, the selection and Source Control's visibility, with the `pult-diff:` sides and the badges registered. */
   static async start(): Promise<ChangesView> {
-    const [scm, models, languages, editors, commands, textModels, decorations, uriIdentity, contextKeys, views, notifications, progress, quickInput] =
+    const [scm, models, languages, editors, commands, textModels, decorations, uriIdentity, contextKeys, views, notifications, progress, quickInput, files, host] =
       await Promise.all([
         getService(ISCMService),
         getService(IModelService),
@@ -356,6 +363,8 @@ class ChangesView {
         getService(INotificationService),
         getService(IProgressService),
         getService(IQuickInputService),
+        getService(IFileService),
+        getService(IHostService),
       ]);
     const filteredKey = ChangesFilteredContext.bindTo(contextKeys);
     const view = new ChangesView(
@@ -375,6 +384,16 @@ class ChangesView {
     });
     views.onDidChangeViewContainerVisibility(({ id, visible }) => {
       if (id === SCM_CONTAINER) view.setVisible(visible);
+    });
+    // A file written through the page, or changed as a folder's watch reports it, makes its checkout's diff stale.
+    const { extUri } = uriIdentity;
+    files.onDidFilesChange((event) => view.filesChanged((root) => event.affects(root)));
+    files.onDidRunOperation(({ resource, target }) =>
+      view.filesChanged((root) => extUri.isEqualOrParent(resource, root) || (target !== undefined && extUri.isEqualOrParent(target.resource, root))),
+    );
+    // What changed while the page was away (a terminal, another editor, a commit) shows on its return.
+    host.onDidChangeFocus((focused) => {
+      if (focused && view.visible) view.refreshScope(false);
     });
     onDidSelectThread(() => view.select(selectedThread() ?? null));
     // The store may load after the selection, adds and drops checkouts, and a finished run changes the files.
@@ -462,6 +481,20 @@ class ChangesView {
   private setVisible(visible: boolean): void {
     this.visible = visible;
     if (visible) this.refreshScope(false);
+  }
+
+  /** Marks the checkouts the view shows whose root `touches` names as stale, reading them again once writes settle. */
+  private filesChanged(touches: (root: URI) => boolean): void {
+    if (!this.visible) return;
+    for (const entry of this.scope()) if (touches(pultUri(entry.checkout.environmentId, entry.checkout.root))) this.stale.add(entry);
+    if (this.stale.size === 0 || this.staleTimer !== undefined) return;
+    this.staleTimer = setTimeout(() => {
+      this.staleTimer = undefined;
+      const stale = [...this.stale];
+      this.stale.clear();
+      // A read already under way may predate the change.
+      for (const entry of stale) if (this.entries.get(entry.key) === entry) void this.refresh(entry, true);
+    }, FILE_CHANGE_DELAY_MS);
   }
 
   /** Reads what the view shows again; `force` asks anew even for a checkout already being read. */
