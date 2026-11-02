@@ -288,7 +288,7 @@ function SettledTail({
 /**
  * T3 Code's thread card without its bottom row: project icon and name, its
  * `environment`'s label beside them while there are several (`EnvironmentChip`),
- * pin, a dot while its composer holds an unsent message, and status, then the title, as the button that selects the thread; on
+ * pin, a dot while it is not selected and its composer holds an unsent message, and status, then the title, as the button that selects the thread; on
  * hover or keyboard focus the status gives way to the thread's actions
  * (`StatusSlot`), and a right-click opens its menu (`showThreadMenu`).
  * Selected, it expands with its subagents under their header, each selecting
@@ -315,7 +315,8 @@ function ThreadCard({
   now: number;
 }) {
   const select = () => run("pult-shell.selectThread", thread.environmentId, thread.id);
-  const unsent = useSyncExternalStore(threadsWithUnsentMessages.subscribe, threadsWithUnsentMessages.get).has(keyOf(thread));
+  // The selected thread's composer shows its message itself.
+  const unsent = useSyncExternalStore(threadsWithUnsentMessages.subscribe, threadsWithUnsentMessages.get).has(keyOf(thread)) && !selected;
   useProjectIcons();
   return (
     <li className={`pult-card${selected ? " pult-card-selected" : ""}${thread.shelf === "settled" ? " pult-card-settled" : ""}`}>
