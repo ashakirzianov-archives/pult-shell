@@ -1,4 +1,5 @@
-import { getService, ICommandService, IDecorationsService, ILabelService, IWorkspaceContextService } from "@codingame/monaco-vscode-api";
+import { getService, IDecorationsService, ILabelService, IWorkspaceContextService } from "@codingame/monaco-vscode-api";
+import { IExplorerService } from "@codingame/monaco-vscode-api/vscode/vs/workbench/contrib/files/browser/files.service";
 import { registerCustomProvider } from "@codingame/monaco-vscode-files-service-override";
 
 import { connection } from "../connection/index.ts";
@@ -70,7 +71,7 @@ async function followWorkspace(provider: PultFileSystemProvider): Promise<void> 
     }
     if (reconnected && provider.failedUnavailable) {
       provider.failedUnavailable = false;
-      void getService(ICommandService).then((commands) => commands.executeCommand("workbench.files.action.refreshFilesExplorer"));
+      void refreshExplorer();
     }
   };
   // A thread's run that finished may have changed files under its root.
@@ -94,7 +95,7 @@ async function followWorkspace(provider: PultFileSystemProvider): Promise<void> 
       changed ||= listedProjects.has(environmentId) && listedProjects.get(environmentId) !== listed;
       listedProjects.set(environmentId, listed);
     }
-    if (changed) void getService(ICommandService).then((commands) => commands.executeCommand("workbench.files.action.refreshFilesExplorer"));
+    if (changed) void refreshExplorer();
   };
   connection.onDidChange(followConnection);
   threadStore.subscribe(followTurns);
@@ -102,4 +103,13 @@ async function followWorkspace(provider: PultFileSystemProvider): Promise<void> 
   followConnection();
   followTurns();
   followProjects();
+}
+
+/**
+ * The explorer's tree read again, its folders' children forgotten even while
+ * it is hidden, so it reads them when it shows; not the Refresh Explorer
+ * command, which opens the Explorer tab first.
+ */
+async function refreshExplorer(): Promise<void> {
+  await (await getService(IExplorerService)).refresh();
 }
