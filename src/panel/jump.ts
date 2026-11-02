@@ -1,9 +1,7 @@
-import { getService, IKeybindingService, ILifecycleService } from "@codingame/monaco-vscode-api";
-import { KeyCode, KeyMod } from "@codingame/monaco-vscode-api/vscode/vs/base/common/keyCodes";
+import { getService, ILifecycleService } from "@codingame/monaco-vscode-api";
 import { isMacintosh } from "@codingame/monaco-vscode-api/vscode/vs/base/common/platform";
 import type { URI } from "@codingame/monaco-vscode-api/vscode/vs/base/common/uri";
 import { Action2, registerAction2 } from "@codingame/monaco-vscode-api/vscode/vs/platform/actions/common/actions";
-import { KeybindingWeight } from "@codingame/monaco-vscode-api/vscode/vs/platform/keybinding/common/keybindingsRegistry";
 import { LifecyclePhase } from "@codingame/monaco-vscode-api/vscode/vs/workbench/services/lifecycle/common/lifecycle";
 
 import {
@@ -86,6 +84,10 @@ function currentTargets(): JumpTarget<URI>[] {
 
 const JUMPS = 9;
 const jumpCommand = (index: number) => `pult-shell.jump.${index + 1}`;
+/** The jump modifier: Cmd on the Mac, Ctrl elsewhere, as upstream's `mod`. */
+const isJumpModifier = (event: KeyboardEvent) =>
+  (isMacintosh ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey) && !event.altKey && !event.shiftKey;
+const jumpLabel = (index: number) => `${isMacintosh ? "⌘" : "Ctrl+"}${index + 1}`;
 
 /** How long the jump modifier is held alone before the hints show, as upstream's. */
 const HINT_DELAY_MS = 200;
@@ -93,7 +95,6 @@ const HINT_DELAY_MS = 200;
 let labels: ReadonlyMap<string, string> = new Map();
 const hintListeners = new Set<() => void>();
 let hintsShown = false;
-let keybindings: IKeybindingService | undefined;
 
 /** The jump hints, each reachable row's shortcut by its key, while the jump modifier is held alone; empty otherwise. */
 export const jumpHints = {
@@ -104,33 +105,30 @@ export const jumpHints = {
   },
 };
 
-/** Labels the reachable rows with their shortcuts as the keybinding service resolves them, so a rebinding shows. */
 function refreshHints(): void {
-  const service = keybindings;
-  if (!hintsShown || service === undefined) {
-    if (labels.size === 0) return;
-    labels = new Map();
-  } else {
-    const shortcut = (index: number) => service.lookupKeybinding(jumpCommand(index))?.getLabel() ?? undefined;
-    labels = new Map(
-      currentTargets()
-        .slice(0, JUMPS)
-        .flatMap((target, index) => {
-          const label = shortcut(index);
-          return label === undefined ? [] : [[target.key, label] as const];
-        }),
-    );
-  }
+  if (!hintsShown && labels.size === 0) return;
+  labels = hintsShown
+    ? new Map(
+        currentTargets()
+          .slice(0, JUMPS)
+          .map((target, index) => [target.key, jumpLabel(index)] as const),
+      )
+    : new Map();
   for (const listener of hintListeners) listener();
 }
 
 /**
- * Upstream's jump hints: holding Cmd (Ctrl off the Mac) alone for a moment
- * labels the rows it reaches; another modifier, letting go, or the window
- * losing focus takes them away. In the desktop wrapper only, as upstream's
- * jumps are desktop-only: a browser tab keeps Cmd+1 to Cmd+9 for its tabs.
+ * The keys themselves, on the page's own listener rather than the
+ * workbench's keybindings: the workbench drops every Cmd+digit binding
+ * outside full screen as a browser's (`_assertBrowserConflicts`), the
+ * desktop wrapper's page included. And upstream's hints: holding the
+ * modifier alone for a moment labels the rows it reaches; another modifier,
+ * letting go, or the window losing focus takes them away. The hints show in
+ * the desktop wrapper only, as upstream's jumps are desktop-only: a browser
+ * tab keeps Cmd+1 to Cmd+9 for its own tabs, so they would promise what the
+ * keys cannot do there.
  */
-function followJumpModifier(): void {
+function followJumpKeys(): void {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const hold = (held: boolean) => {
     if (held === (hintsShown || timer !== undefined)) return;
@@ -148,8 +146,12 @@ function followJumpModifier(): void {
     }
   };
   const onKey = (event: KeyboardEvent) => {
-    const mod = isMacintosh ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
-    hold(window.pultDesktop !== undefined && mod && !event.altKey && !event.shiftKey);
+    hold(window.pultDesktop !== undefined && isJumpModifier(event));
+    const digit = event.type === "keydown" && isJumpModifier(event) ? /^Digit([1-9])$/.exec(event.code)?.[1] : undefined;
+    if (digit === undefined) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.repeat) void jump(currentTargets()[Number(digit) - 1]);
   };
   // Capturing on the window, ahead of the workbench and the thread view, which stop some keys.
   window.addEventListener("keydown", onKey, true);
@@ -175,11 +177,11 @@ function jump(target: JumpTarget<URI> | undefined): Promise<void> {
 }
 
 /**
- * Cmd+1 to Cmd+9 (`pult-shell.jump.1` to `.9`), upstream's thread jumps: the
- * left panel's Nth row (`jumpTargets`), an Explorer file, a draft or a
- * thread, whether or not the panel shows; over VS Code's focus of the Nth
- * editor group. Not in the palette, where Pult: Open Thread… is. Registered
- * before the workbench starts.
+ * Cmd+1 to Cmd+9 (Ctrl off the Mac), upstream's thread jumps: the left
+ * panel's Nth row (`jumpTargets`), an Explorer file, a draft or a thread,
+ * whether or not the panel shows (`followJumpKeys`). Each is a command too,
+ * `pult-shell.jump.1` to `.9`, for another binding; not in the palette,
+ * where Pult: Open Thread… is. Registered before the workbench starts.
  */
 export function registerJumps(): void {
   for (let index = 0; index < JUMPS; index++) {
@@ -190,7 +192,6 @@ export function registerJumps(): void {
             id: jumpCommand(index),
             title: { value: `Jump to Panel Row ${index + 1}`, original: `Jump to Panel Row ${index + 1}` },
             category: { value: "Pult", original: "Pult" },
-            keybinding: { primary: KeyMod.CtrlCmd | (KeyCode.Digit1 + index), weight: KeybindingWeight.WorkbenchContrib + 1 },
           });
         }
 
@@ -200,9 +201,8 @@ export function registerJumps(): void {
       },
     );
   }
-  followJumpModifier();
+  followJumpKeys();
   void (async () => {
-    keybindings = await getService(IKeybindingService);
     // The drafts load with the thread view's stores, which break the workbench's start when they load before it; the panel's cards load them too.
     await (await getService(ILifecycleService)).when(LifecyclePhase.Restored);
     projectDrafts.subscribe(refreshHints);
