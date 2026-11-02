@@ -124,12 +124,17 @@ export function environmentShell(environmentId: string) {
   };
 }
 
+/** The environment's project and worktree roots as `pult:` URI paths, as the store lists them. */
+export function knownRoots(environmentId: string): ReadonlyArray<string> {
+  return projectRoots(environmentShell(environmentId)).map((root) => toUriPath(root.path));
+}
+
 /** The workbench as the environment's files see it: its folders and open models on that environment. */
 function hostOf(environmentId: string): WorkspaceFilesHost {
   const resource = (path: string) => pultResource(environmentId, path);
   return {
     roots: () => pultFolders(environmentId).map((folder) => folder.uri.path),
-    knownRoots: () => projectRoots(environmentShell(environmentId)).map((root) => toUriPath(root.path)),
+    knownRoots: () => knownRoots(environmentId),
     openPaths: () =>
       services === undefined
         ? []

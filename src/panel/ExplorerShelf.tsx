@@ -12,7 +12,7 @@ function run(command: string, ...args: unknown[]): void {
   void getService(ICommandService).then((commands) => commands.executeCommand(command, ...args));
 }
 
-/** A row of the shelf: an environment's home, or an open file. */
+/** A row of the shelf: an environment, or an open file. */
 interface Entry {
   readonly key: string;
   readonly node: React.ReactNode;
@@ -22,7 +22,7 @@ interface Entry {
  * The Explorer shelf, the panel's first: the Explorer workspace, files opened
  * under no thread, under its collapsible header, open until closed. A row
  * per held environment, selecting the workspace with the Explorer tab at
- * its home (`pult-shell.exploreEnvironment`), its open files under it,
+ * its folder above its projects (`pult-shell.exploreEnvironment`), its open files under it,
  * each selecting the workspace at its tab; files of no held environment
  * last. While the workspace is `selected`, its active file's row is
  * highlighted, or with none listed the environment's explored last;
@@ -57,9 +57,9 @@ export function ExplorerShelf({ selected, environments }: { selected: boolean; e
         key: environmentKey(environment.id),
         node: (
           <EntryButton
-            icon="home"
+            icon="root-folder"
             label={environment.name}
-            title={`Explore ${environment.name}'s home folder`}
+            title={`Explore ${environment.name}'s projects`}
             nested={false}
             selected={environmentKey(environment.id) === highlighted}
             onClick={() => run("pult-shell.exploreEnvironment", environment.id)}

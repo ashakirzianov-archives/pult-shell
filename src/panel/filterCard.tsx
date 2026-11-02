@@ -12,10 +12,9 @@ const FILE_VIEW_ID = "workbench.explorer.fileView";
 /**
  * The Explorer tab's filter, a card above the tree while the folders are
  * narrowed, in the thread cards' look, with a clear mark on hover that shows
- * every environment's home instead: to the selected thread's root, the
- * project's icon and name, then the thread's title ("New thread" for a
- * draft); to an environment's home, the environment's name, then the home's
- * path.
+ * every environment's folder above its projects instead: to the selected
+ * thread's root, the project's icon and name, then the thread's title ("New
+ * thread" for a draft); to an environment's folder, its name, then its path.
  */
 function FilterCard() {
   const filter = useSyncExternalStore(explorerFilter.subscribe, explorerFilter.get);
@@ -27,14 +26,14 @@ function FilterCard() {
         {filter.kind === "thread" ? (
           <img className="pult-card-icon" src={projectIconUri(filter.project).toString(true)} alt="" />
         ) : (
-          <i className="pult-card-icon codicon codicon-home" aria-hidden />
+          <i className="pult-card-icon codicon codicon-root-folder" aria-hidden />
         )}
         <span className="pult-card-project">{filter.kind === "thread" ? filter.project.name : filter.environment}</span>
         <button
           type="button"
           className="pult-explorer-card-clear codicon codicon-close"
           aria-label="Clear the filter"
-          title="Clear the filter: show the home folder"
+          title="Clear the filter: show the environments' projects"
           onClick={() => void getService(ICommandService).then((commands) => commands.executeCommand("pult-shell.openEnvironmentExplorer"))}
         />
       </span>

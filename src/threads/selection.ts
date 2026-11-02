@@ -140,7 +140,7 @@ function recordExplorerFiles(editors: IEditorService, storage: IStorageService):
  * Selects the Explorer workspace, the files of the environments opened under
  * no thread: its tab set as a thread's is, with no lead tab. With
  * `showExplorerTab`, the sidebar shows the Explorer tab too, which shows
- * every environment's home while this workspace is selected
+ * every environment's folder above its projects while this workspace is selected
  * (`src/panel/explorer.ts`).
  */
 export function selectExplorer(showExplorerTab = false): Promise<void> {

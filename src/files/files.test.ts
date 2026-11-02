@@ -300,6 +300,18 @@ describe("WorkspaceFiles on a stock server", () => {
     assert.equal((await rejection(files.stat(`${ROOT}/src/gone.ts`))).code, "FileNotFound");
   });
 
+  it("lists only the way to the projects in a folder above them, and all of a project", async () => {
+    const { server } = setup(STOCK);
+    server.directories.add(HOME);
+    server.directories.add(`${HOME}/Downloads`);
+    server.put(`${HOME}/notes.txt`, "");
+    server.directories.add(`${ROOT}/dist`);
+    const { files } = openWindow(server, [], [HOME]);
+
+    assert.deepEqual(await files.readDirectory(HOME), [["repo", "directory"]]);
+    assert.deepEqual((await files.readDirectory(ROOT)).map(([name]) => name).toSorted(), ["dist", "src"]);
+  });
+
   it("stats a known root and what is under it before the root is a folder", async () => {
     const { files, server } = setup(STOCK);
     server.directories.add(`${OTHER_PROJECT}/lib`);

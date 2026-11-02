@@ -173,7 +173,7 @@
   height: 14px;
 }
 
-/* A codicon in the icon's place: the filter's card for an environment's home. */
+/* A codicon in the icon's place: the filter's card for an environment's folder. */
 .codicon.pult-card-icon {
   font-size: 14px;
   color: var(--vscode-descriptionForeground);
@@ -527,7 +527,7 @@
   order: 1;
 }
 
-/* The Explorer shelf (src/panel/ExplorerShelf.tsx): an environment's home, its open files indented under it, one compact row each, selected on the cards' background. */
+/* The Explorer shelf (src/panel/ExplorerShelf.tsx): an environment, its open files indented under it, one compact row each, selected on the cards' background. */
 .pult-explorer-entries {
   margin: 0;
   padding: 0;

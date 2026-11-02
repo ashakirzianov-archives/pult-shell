@@ -4,12 +4,13 @@ import { registerCustomProvider } from "@codingame/monaco-vscode-files-service-o
 import { connection } from "../connection/index.ts";
 import { threadStore } from "../threads/store.ts";
 import { registerFilesCommands } from "./commands.ts";
-import { PULT_SCHEME, toUriPath } from "./paths.ts";
+import { projectsUnder, PULT_SCHEME, toUriPath } from "./paths.ts";
 import { endedTurns } from "./projects.ts";
 import { PultFileSystemProvider, workspaceDecorations } from "./provider.ts";
 import {
   allWorkspaceFiles,
   environmentShell,
+  knownRoots,
   pultFolders,
   releaseWorkspaceFiles,
   servicesReady,
@@ -23,7 +24,8 @@ import {
  * and the workspace's commands. Once the workbench is up, what keeps open
  * files current: each environment's folders' watches where its server has
  * them, synced as the folders change, and turn ends and reconnects in every
- * environment.
+ * environment; and the explorer refreshed when the projects under a folder
+ * above them change, since such a folder lists only the way to them.
  */
 export function registerPultFiles(): void {
   const provider = new PultFileSystemProvider();
@@ -74,8 +76,25 @@ async function followWorkspace(provider: PultFileSystemProvider): Promise<void> 
       for (const root of ended.roots) void workspaceFiles(environmentId).refresh(toUriPath(root));
     }
   };
+  // A folder above the projects lists only the way to them, so a project added or gone under it changes what it lists.
+  const listedProjects = new Map<string, string>();
+  const followProjects = () => {
+    let changed = false;
+    for (const { environmentId } of connection.environments) {
+      const roots = knownRoots(environmentId);
+      const listed = pultFolders(environmentId)
+        .flatMap((folder) => projectsUnder(folder.uri.path, roots))
+        .toSorted()
+        .join("\n");
+      changed ||= listedProjects.has(environmentId) && listedProjects.get(environmentId) !== listed;
+      listedProjects.set(environmentId, listed);
+    }
+    if (changed) void getService(ICommandService).then((commands) => commands.executeCommand("workbench.files.action.refreshFilesExplorer"));
+  };
   connection.onDidChange(followConnection);
   threadStore.subscribe(followTurns);
+  threadStore.subscribe(followProjects);
   followConnection();
   followTurns();
+  followProjects();
 }

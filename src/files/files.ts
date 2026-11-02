@@ -24,6 +24,7 @@ import type {
 
 import {
   baseName,
+  folderShows,
   joinPath,
   type Located,
   locate,
@@ -253,14 +254,17 @@ export class WorkspaceFiles implements Disposable {
     };
   }
 
-  /** Only the workspace folders are browsed. */
+  /** Only the workspace folders are browsed; a folder above the known roots, only on the way to them (`folderShows`). */
   async readDirectory(path: string): Promise<Array<[string, ProjectEntry["kind"]]>> {
     const folder = locate(this.host.roots(), path);
     if (folder === undefined) {
       throw new FilesError("NoPermissions", `Pult browses only the workspace folders: ${path}.`);
     }
     const entries = await this.list(folder.root, folder.relativePath);
-    return entries.map((entry) => [baseName(entry.path), entry.kind]);
+    const knownRoots = this.host.knownRoots();
+    return entries
+      .filter((entry) => folderShows(folder.root, knownRoots, joinPath(folder.root, entry.path)))
+      .map((entry) => [baseName(entry.path), entry.kind]);
   }
 
   async readFile(path: string): Promise<Uint8Array> {

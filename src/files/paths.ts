@@ -69,3 +69,39 @@ export function baseName(path: string): string {
 export function namesEnvironment(authority: string, environmentId: string): boolean {
   return authority.toLowerCase() === environmentId.toLowerCase();
 }
+
+/**
+ * The closest directory above every one of `paths`, as an environment's
+ * folder is above its projects: `/repos` for `/repos/a` and `/repos/a/b`.
+ * Undefined for no paths, or for paths on different Windows drives.
+ */
+export function commonParent(paths: ReadonlyArray<string>): string | undefined {
+  const parents = paths.map((path) => path.split("/").filter((segment) => segment !== "").slice(0, -1));
+  const [first] = parents;
+  if (first === undefined) return undefined;
+  let length = 0;
+  while (length < first.length && parents.every((parent) => parent[length] === first[length])) length += 1;
+  const common = first.slice(0, length);
+  const drive = /^[a-z]:$/i;
+  if (common.length === 0 && paths.some((path) => drive.test(path.split("/")[1] ?? ""))) return undefined;
+  return common.length === 1 && drive.test(common[0] ?? "") ? `/${common[0]}/` : `/${common.join("/")}`;
+}
+
+/**
+ * Whether a workspace folder shows `path`, given the environment's project
+ * and worktree roots: a folder above some of them, and in none, shows only
+ * those roots, what is under them and the directories on the way to them;
+ * any other folder, all that is under it.
+ */
+export function folderShows(folder: string, knownRoots: ReadonlyArray<string>, path: string): boolean {
+  if (relativeTo(folder, path) === undefined) return false;
+  const below = projectsUnder(folder, knownRoots);
+  return below.length === 0 || below.some((root) => relativeTo(root, path) !== undefined || relativeTo(path, root) !== undefined);
+}
+
+/** The outermost of `knownRoots` strictly under `folder`, or none when `folder` is in one of them, which then shows all that is under it. */
+export function projectsUnder(folder: string, knownRoots: ReadonlyArray<string>): ReadonlyArray<string> {
+  if (knownRoots.some((root) => relativeTo(root, folder) !== undefined)) return [];
+  const below = knownRoots.filter((root) => relativeTo(folder, root) !== undefined);
+  return below.filter((root) => !below.some((other) => other !== root && relativeTo(other, root) !== undefined));
+}

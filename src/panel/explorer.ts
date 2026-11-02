@@ -22,8 +22,9 @@ import { WS_METHODS } from "@t3tools/contracts";
 
 import { pickEnvironment } from "../connection/commands.ts";
 import { connection } from "../connection/index.ts";
-import { namesEnvironment, PULT_SCHEME, relativeTo, toUriPath } from "../files/paths.ts";
+import { commonParent, folderShows, namesEnvironment, projectsUnder, PULT_SCHEME, relativeTo, toHostPath, toUriPath } from "../files/paths.ts";
 import { whenReady } from "../files/server.ts";
+import { knownRoots } from "../files/workspace.ts";
 import { type ProjectIconSource, threadProjectIcon } from "../threads/projectIcon.ts";
 import {
   type DraftSelection,
@@ -46,7 +47,7 @@ const HIDDEN_VIEW_IDS = ["outline", "timeline", "workbench.explorer.openEditorsV
 /**
  * What the Explorer tab is rooted at, as the user chose it: the selected
  * thread's root alone, shown as a card above the tree that clears it, or
- * each held environment's home directory. Kept in workspace storage;
+ * each held environment's folder (`environmentFolder`). Kept in workspace storage;
  * `thread` until the user clears it.
  */
 type Scope = "thread" | "environment";
@@ -58,7 +59,7 @@ const ScopeContext = new RawContextKey<Scope>("pult.explorerScope", "environment
 /** Whether the scope's thread has a root to narrow to: the toggle's precondition. */
 const ThreadHasFolderContext = new RawContextKey<boolean>("pult.threadHasFolder", false);
 
-/** The thread or draft selected last, the thread scope's; while the Explorer workspace is selected, the scope's folders are the homes regardless. */
+/** The thread or draft selected last, the thread scope's; while the Explorer workspace is selected, the scope's folders are the environments' regardless. */
 let lastSelected: ThreadSelection | DraftSelection | undefined;
 
 interface Folder {
@@ -69,7 +70,7 @@ interface Folder {
 /**
  * The environment whose entry on the Explorer shelf was clicked last, while
  * the Explorer workspace stays selected: with several environments held the
- * folders narrow to its home alone, the filter's card showing it. Another
+ * folders narrow to its folder alone, the filter's card showing it. Another
  * selection, or the filter's clear, forgets it.
  */
 let explored: string | undefined;
@@ -90,14 +91,14 @@ function setExplored(next: string | undefined): void {
   for (const listener of exploredListeners) listener();
 }
 
-/** The environment whose home the folders narrow to: the one explored, while the Explorer workspace is selected and the page holds it and another. */
-function narrowedHome(): string | undefined {
+/** The environment whose folder the folders narrow to: the one explored, while the Explorer workspace is selected and the page holds it and another. */
+function narrowedEnvironment(): string | undefined {
   if (explored === undefined || !explorerSelected() || threadStore.get().environments.length < 2) return undefined;
   return threadStore.environment(explored) === undefined ? undefined : explored;
 }
 
 /**
- * The Explorer workspace with the Explorer tab at `environmentId`'s home, or
+ * The Explorer workspace with the Explorer tab at `environmentId`'s folder, or
  * at every environment's without one: the Explorer shelf's environment entries.
  */
 export async function exploreEnvironment(environmentId: string | undefined): Promise<void> {
@@ -125,9 +126,9 @@ export async function openThreadExplorer(): Promise<void> {
   await openExplorer("thread");
 }
 
-/** The Explorer tab at every held environment's home directory: the filter's card clears to it, a narrowed home's to the Explorer workspace's homes. */
+/** The Explorer tab at every held environment's folder: the filter's card clears to it, a narrowed environment's to the Explorer workspace's folders. */
 export function openEnvironmentExplorer(): Promise<void> {
-  return narrowedHome() === undefined ? openExplorer("environment") : exploreEnvironment(undefined);
+  return narrowedEnvironment() === undefined ? openExplorer("environment") : exploreEnvironment(undefined);
 }
 
 /** Flips the scope in effect, and shows the Explorer tab. */
@@ -173,14 +174,23 @@ function homeOf(environmentId: string): Promise<string> {
   return home;
 }
 
-/** The environment's home as a folder: `~`, or while the page holds several the environment's name, as the cards' chips name it. */
-async function homeFolder(environmentId: string): Promise<Folder> {
-  return { uri: pultUri(environmentId, await homeOf(environmentId)), name: threadStore.distinguishing(environmentId) ?? "~" };
-}
-
-/** Whether `uri` is `root` or under it, on the same environment. */
-function within(uri: URI, root: URI): boolean {
-  return uri.scheme === root.scheme && namesEnvironment(uri.authority, root.authority) && relativeTo(root.path, uri.path) !== undefined;
+/**
+ * The environment's folder: the closest directory above its projects, which
+ * the explorer lists only the way to (`folderShows`), or its home while it
+ * has none. Named by its place in the home, `~` or `~/repos`, or by its
+ * path outside it, or while the page holds several by the environment's
+ * name, as the cards' chips name it.
+ */
+async function environmentFolder(environmentId: string): Promise<Folder> {
+  const home = await homeOf(environmentId).then(toUriPath, (error: unknown) => {
+    if (knownRoots(environmentId).length === 0) throw error;
+    return undefined;
+  });
+  const path = commonParent(knownRoots(environmentId)) ?? home;
+  if (path === undefined) throw new Error("The environment has no projects and no home folder.");
+  const inHome = home === undefined ? undefined : relativeTo(home, path);
+  const placed = inHome === undefined ? toHostPath(path) : inHome === "" ? "~" : `~/${inHome}`;
+  return { uri: pultUri(environmentId, path), name: threadStore.distinguishing(environmentId) ?? placed };
 }
 
 /**
@@ -223,14 +233,15 @@ let updateContextKeys = () => {};
  * Sets the workspace folders to the scope's, one update at a time: each reads
  * the scope and the folders when its turn comes, after the previous update
  * has landed. The thread scope narrows them to the selected thread's root;
- * the Explorer workspace narrows them to the explored environment's home
- * (`narrowedHome`), while that home can be had; the environment scope,
- * and the thread scope of a thread without one, set each held
- * environment's home directory, keeping a folder of the held
- * environments already there outside its home (one "Pult: Open Project"
- * added), or all of its folders while its home cannot be had; a home is
- * renamed as the number of environments makes its name carry its
- * environment's or not. Before the restored selection is known, the thread
+ * the Explorer workspace narrows them to the explored environment's folder
+ * (`narrowedEnvironment`), while that folder can be had; the environment
+ * scope, and the thread scope of a thread without one, set each held
+ * environment's folder (`environmentFolder`), keeping a folder of the held
+ * environments already there that its environment's does not list and
+ * that is above none of its projects (one "Pult: Open Project" added, until
+ * the store lists its project), or all of its folders while its
+ * environment's cannot be had; a folder is renamed as the number of
+ * environments makes its name carry its environment's or not. Before the restored selection is known, the thread
  * scope leaves the folders as they are. A failure is notified. Resolves to
  * whether the folders are the scope's.
  */
@@ -247,24 +258,30 @@ function reroot(): Promise<boolean> {
     const { environments } = threadStore.get();
     // Nothing to narrow to until the restored selection is known: the folders stay as the workspace kept them.
     if (environments.length === 0 || (scope === "thread" && lastSelected === undefined && !explorerSelected())) return true;
-    const home = narrowedHome();
-    const homeRoot = home === undefined ? undefined : await homeFolder(home).catch(() => undefined);
-    if (home !== undefined) setFilter(homeRoot === undefined ? undefined : { kind: "home", environment: homeRoot.name, path: homeRoot.uri.path });
-    const root = effectiveRoot() ?? homeRoot;
+    const narrowed = narrowedEnvironment();
+    const narrowedRoot = narrowed === undefined ? undefined : await environmentFolder(narrowed).catch(() => undefined);
+    if (narrowed !== undefined) {
+      setFilter(narrowedRoot === undefined ? undefined : { kind: "environment", environment: narrowedRoot.name, path: narrowedRoot.uri.path });
+    }
+    const root = effectiveRoot() ?? narrowedRoot;
     const current = (await getService(IWorkspaceContextService)).getWorkspace().folders;
     const wanted = new Map<string, Folder>();
     // The thread's root keeps its folder, and its tree, under whichever name it has.
     if (root !== undefined) wanted.set(keyOf(root.uri), current.find((folder) => keyOf(folder.uri) === keyOf(root.uri)) ?? root);
     else {
-      // An environment whose home cannot be had (offline, its server not answering) keeps its folders as they are.
-      const homeFolders = (await Promise.all(environments.map((environment) => homeFolder(environment.id).catch(() => undefined)))).filter(
-        (home) => home !== undefined,
-      );
-      for (const home of homeFolders) wanted.set(keyOf(home.uri), home);
+      // An environment whose folder cannot be had (no projects listed yet and its server not answering) keeps its folders as they are.
+      const environmentFolders = (
+        await Promise.all(environments.map((environment) => environmentFolder(environment.id).catch(() => undefined)))
+      ).filter((folder) => folder !== undefined);
+      for (const folder of environmentFolders) wanted.set(keyOf(folder.uri), folder);
       const held = new Set(environments.map((environment) => environment.id.toLowerCase()));
       for (const folder of current) {
         if (folder.uri.scheme !== PULT_SCHEME || !held.has(folder.uri.authority.toLowerCase())) continue;
-        if (!homeFolders.some((home) => within(folder.uri, home.uri))) wanted.set(keyOf(folder.uri), folder);
+        const own = environmentFolders.find((candidate) => namesEnvironment(folder.uri.authority, candidate.uri.authority));
+        const roots = knownRoots(folder.uri.authority);
+        // A folder above projects is a former environment folder; the projects show under the current one.
+        const listed = own !== undefined && (folderShows(own.uri.path, roots, folder.uri.path) || projectsUnder(folder.uri.path, roots).length > 0);
+        if (!listed) wanted.set(keyOf(folder.uri), folder);
       }
     }
     // A folder kept under another name is replaced.
@@ -297,7 +314,7 @@ function reroot(): Promise<boolean> {
 /**
  * Keeps the folders to the scope once the workbench is up. The scope follows
  * the selection, and a folder added from elsewhere while it is narrowed
- * widens it to the environment's and is revealed there. Every change to the
+ * widens it to the environments' and is revealed there. Every change to the
  * thread model re-roots, so a thread gone or rootless falls back to the
  * environment's, and the filter follows the root in effect. The Explorer tab, however
  * opened (Cmd+Shift+E, Reveal in Explorer, its tab), shows the scope as it is,
@@ -314,8 +331,8 @@ export async function followExplorerScope(): Promise<void> {
     const root = effectiveRoot();
     scopeKey.set(root === undefined ? "environment" : "thread");
     hasFolderKey.set(threadRootOfScope() !== undefined);
-    // A narrowed home's filter waits for its home (`reroot`).
-    if (narrowedHome() === undefined) setFilter(root === undefined ? undefined : filterOfScope(root));
+    // A narrowed environment's filter waits for its folder (`reroot`).
+    if (narrowedEnvironment() === undefined) setFilter(root === undefined ? undefined : filterOfScope(root));
   };
   const viewDescriptors = await getService(IViewDescriptorService);
   const explorer = viewDescriptors.getViewContainerById(EXPLORER_ID);
@@ -332,13 +349,13 @@ export async function followExplorerScope(): Promise<void> {
     if (!explorerSelected()) setExplored(undefined);
     void reroot();
   });
-  // A folder added from elsewhere ("Pult: Open Project") while the folders are narrowed widens them, and shows the folder, under its home if it is in one.
+  // A folder added from elsewhere ("Pult: Open Project") while the folders are narrowed widens them, and shows the folder, under its environment's if that lists it.
   const commands = await getService(ICommandService);
   (await getService(IWorkspaceContextService)).onDidChangeWorkspaceFolders(({ added }) => {
     const folder = added[0];
     if (updating || folder === undefined) return;
     const reveal = (rerooted: boolean) => rerooted && commands.executeCommand("revealInExplorer", folder.uri);
-    if (narrowedHome() !== undefined) {
+    if (narrowedEnvironment() !== undefined) {
       setExplored(undefined);
       void reroot().then(reveal);
     } else if (effectiveRoot() !== undefined) void setScope("environment").then(reroot).then(reveal);
@@ -351,12 +368,12 @@ export async function followExplorerScope(): Promise<void> {
  * What the filter's card shows while the folders are narrowed
  * (`filterCard.tsx`): to a thread's root, the root's project, with its icon,
  * and the thread's title when a thread, not a draft of a new one, narrowed
- * them; to an environment's home, the environment's name. `path` is the
+ * them; to an environment's folder, the folder's name. `path` is the
  * root's, as its URI has it.
  */
 export type ExplorerFilter =
   | { readonly kind: "thread"; readonly project: ProjectIconSource; readonly threadTitle: string | undefined; readonly path: string }
-  | { readonly kind: "home"; readonly environment: string; readonly path: string };
+  | { readonly kind: "environment"; readonly environment: string; readonly path: string };
 
 let filter: ExplorerFilter | undefined;
 const filterListeners = new Set<() => void>();
@@ -445,7 +462,7 @@ export function registerExplorerCommands(): void {
       constructor() {
         super({
           id: "pult-shell.exploreEnvironment",
-          title: { value: "Explore Environment's Home…", original: "Explore Environment's Home…" },
+          title: { value: "Explore Environment…", original: "Explore Environment…" },
           category,
           f1: true,
         });
@@ -453,7 +470,7 @@ export function registerExplorerCommands(): void {
 
       async run(_accessor: ServicesAccessor, environmentId?: unknown): Promise<void> {
         if (typeof environmentId === "string") return exploreEnvironment(environmentId);
-        const picked = await pickEnvironment(connection.environments, "Explore an environment's home folder");
+        const picked = await pickEnvironment(connection.environments, "Explore an environment's projects");
         if (picked !== undefined) await exploreEnvironment(picked.environmentId);
       }
     },

@@ -12,17 +12,16 @@ import type { URI } from "@codingame/monaco-vscode-api/vscode/vs/base/common/uri
 import { Action2, registerAction2 } from "@codingame/monaco-vscode-api/vscode/vs/platform/actions/common/actions";
 import { KeybindingWeight } from "@codingame/monaco-vscode-api/vscode/vs/platform/keybinding/common/keybindingsRegistry";
 import type { IQuickPickItem, IQuickPickSeparator } from "@codingame/monaco-vscode-api/vscode/vs/platform/quickinput/common/quickInput";
-import type { IWorkspaceFolder } from "@codingame/monaco-vscode-api/vscode/vs/platform/workspace/common/workspace";
 import { buildProjectCreateCommand } from "@t3tools/client-runtime/operations/projects";
 import { request } from "@t3tools/client-runtime/rpc";
 import { CommandId, ProjectId, WS_METHODS } from "@t3tools/contracts";
 
 import { connection, ConnectedContext, pickEnvironment } from "../connection/index.ts";
 import { threadStore } from "../threads/store.ts";
-import { baseName, joinPath, parentOf, relativeTo, toHostPath, toUriPath } from "./paths.ts";
+import { baseName, folderShows, joinPath, parentOf, projectsUnder, toHostPath, toUriPath } from "./paths.ts";
 import { type ProjectRoot, projectRoots } from "./projects.ts";
 import { environmentServer } from "./server.ts";
-import { environmentShell, pultFolders, pultResource } from "./workspace.ts";
+import { environmentShell, knownRoots, pultFolders, pultResource } from "./workspace.ts";
 
 const SEARCH_DELAY_MS = 150;
 const ENTRY_LIMIT = 50;
@@ -30,8 +29,23 @@ const CONTENT_LIMIT = 200;
 
 type FileItem = IQuickPickItem & { readonly resource: URI };
 type MatchItem = FileItem & { readonly line: number; readonly start: number; readonly end: number };
+/** A directory the searches look in, named in their results. */
+type SearchRoot = { readonly uri: URI; readonly name: string };
 
-/** "Pult: Go to File…": quick open over the server's `searchEntries` in every workspace folder. */
+/** Each workspace folder, or for a folder above projects each project under it, as the explorer lists only the way to them. */
+function searchRoots(): Array<SearchRoot> {
+  return pultFolders().flatMap((folder) => {
+    const roots = projectRoots(environmentShell(folder.uri.authority));
+    const under = projectsUnder(folder.uri.path, roots.map((root) => toUriPath(root.path)));
+    if (under.length === 0) return [folder];
+    return under.map((path) => ({
+      uri: folder.uri.with({ path }),
+      name: roots.find((root) => toUriPath(root.path) === path)?.name ?? baseName(path),
+    }));
+  });
+}
+
+/** "Pult: Go to File…": quick open over the server's `searchEntries` in every search root. */
 async function goToFile(accessor: ServicesAccessor): Promise<void> {
   const editors = accessor.get(IEditorService);
   await searchPick<FileItem>(
@@ -56,8 +70,8 @@ async function goToFile(accessor: ServicesAccessor): Promise<void> {
 }
 
 /**
- * "Pult: Search in Files…": the server's `searchContents` in every workspace
- * folder, as a quick pick; the workbench's search view needs a search
+ * "Pult: Search in Files…": the server's `searchContents` in every search
+ * root, as a quick pick; the workbench's search view needs a search
  * provider for the scheme, which the server's RPCs do not make.
  */
 async function searchInFiles(accessor: ServicesAccessor): Promise<void> {
@@ -98,14 +112,14 @@ async function searchInFiles(accessor: ServicesAccessor): Promise<void> {
   );
 }
 
-/** A quick pick that searches the workspace folders as the user types, dropping stale answers. */
+/** A quick pick that searches the search roots as the user types, dropping stale answers. */
 async function searchPick<Item extends FileItem>(
   accessor: ServicesAccessor,
   options: { readonly placeholder: string; readonly searchEmpty: boolean },
-  search: (query: string, folder: IWorkspaceFolder) => Promise<Array<Item>>,
+  search: (query: string, folder: SearchRoot) => Promise<Array<Item>>,
   open: (item: Item) => Promise<unknown>,
 ): Promise<void> {
-  const folders = pultFolders();
+  const folders = searchRoots();
   if (folders.length === 0) {
     accessor.get(INotificationService).info("Pult: open a project first (Pult: Open Project…).");
     return;
@@ -235,8 +249,8 @@ async function openProject(accessor: ServicesAccessor): Promise<void> {
       return void notifications.error(`Pult could not add ${picked.create} as a project: ${message}`);
     }
   } else return;
-  // A folder in the workspace already, or under one (the environment's home), is shown where it is.
-  if (pultFolders(environmentId).some((existing) => relativeTo(existing.uri.path, folder.uri.path) !== undefined)) {
+  // A folder in the workspace already, or one the explorer lists under one (the environment's folder above its projects), is shown where it is.
+  if (pultFolders(environmentId).some((existing) => folderShows(existing.uri.path, knownRoots(environmentId), folder.uri.path))) {
     return void commands.executeCommand("revealInExplorer", folder.uri);
   }
   await (await getService(IWorkspaceEditingService)).addFolders([folder]);
