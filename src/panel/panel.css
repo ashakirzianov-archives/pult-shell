@@ -302,10 +302,11 @@
   margin-top: 0;
 }
 
-/* The first shelf after Ready (Working, Snoozed or Settled) takes the
-   room Ready leaves, as upstream's lower shelves sit at its sidebar's
-   bottom; the rest follow it. */
-.pult-panel-cards > .pult-shelf-ready + .pult-shelf {
+/* The first shelf after Ready, or after Explorer while there is no Ready
+   (Working, Snoozed or Settled), takes the room Ready leaves, as upstream's
+   lower shelves sit at its sidebar's bottom; the rest follow it. */
+.pult-panel-cards > .pult-shelf-ready + .pult-shelf,
+.pult-panel-cards > .pult-shelf-explorer + .pult-shelf:not(.pult-shelf-ready) {
   margin-top: auto;
   padding-top: 6px;
 }

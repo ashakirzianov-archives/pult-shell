@@ -79,7 +79,8 @@ function subagentsByRoot(threads: ReadonlyArray<ShellThread>, activities: Map<st
 /**
  * The Pult tab's view, under the sidebar's title row: every held
  * environment's threads as cards, in the store's order, which is upstream's:
- * pinned and active under Ready, open until closed, then the Working, Snoozed
+ * pinned and active under Ready, open until closed and left out while it
+ * holds nothing, then the Working, Snoozed
  * and Settled shelves, collapsed until opened, each under a collapsible
  * header. While the page holds several environments, each card names its
  * own. The selected card expands with its details and its subagents; a
@@ -149,7 +150,7 @@ export function PanelView() {
               Connect to Environment
             </button>
           </li>
-        ) : (
+        ) : listed.length > 0 || draftCards.length > 0 ? (
           <Shelf
             name="ready"
             label="Ready"
@@ -160,15 +161,11 @@ export function PanelView() {
             lead={draftCards.map(draftCard)}
             selectedLead={selectedDraftCard === undefined ? null : draftCard(selectedDraftCard)}
           >
-            {listed.length === 0 && draftCards.length > 0 ? null : state.threads.length === 0 ? (
-              <li className="pult-panel-empty">No threads in {state.environments.map((environment) => environment.label).join(", ")}.</li>
-            ) : listed.length === 0 ? (
-              <li className="pult-panel-empty">No threads ready.</li>
-            ) : (
-              listed.map(card)
-            )}
+            {listed.map(card)}
           </Shelf>
-        )}
+        ) : state.threads.length === 0 ? (
+          <li className="pult-panel-empty">No threads in {state.environments.map((environment) => environment.label).join(", ")}.</li>
+        ) : null}
         {working.length > 0 ? (
           <Shelf name="working" label="Working" threads={working} selection={selectedCard} render={card}>
             {working.map(card)}
