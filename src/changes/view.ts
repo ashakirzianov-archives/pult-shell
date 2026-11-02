@@ -314,9 +314,12 @@ type Services = {
  * letting the view show everything while no thread is selected; while the
  * thread has one, a turn instead, its files alone under Changed Files: the
  * turn the thread view's changed files card last opened for the thread,
- * both sides of each file from the turn's checkpoints. It refreshes only
- * while Source Control shows: what it shows, on showing, on "Pult: Refresh
- * Changes", and a checkout's own when a thread on it finishes a run. Each
+ * both sides of each file from the turn's checkpoints. It reads every
+ * checkout, shown or not, so Source Control's badge counts them all: each
+ * as the store brings it, when a thread on it finishes a run or a file
+ * under it changes, and all when the window regains focus; what it shows on
+ * showing and on "Pult: Refresh Changes". The badge is VS Code's, the files
+ * of the source controls shown, so a filter's alone while one narrows. Each
  * checkout shown has a message box and a Commit button, which commit its
  * whole working tree through the server (`commit`), but under a turn.
  */
@@ -393,7 +396,7 @@ class ChangesView {
     );
     // What changed while the page was away (a terminal, another editor, a commit) shows on its return.
     host.onDidChangeFocus((focused) => {
-      if (focused && view.visible) view.refreshScope(false);
+      if (focused) view.refreshAll();
     });
     onDidSelectThread(() => view.select(selectedThread() ?? null));
     // The store may load after the selection, adds and drops checkouts, and a finished run changes the files.
@@ -463,11 +466,9 @@ class ChangesView {
       if (entry !== undefined) ended.add(entry);
     }
     this.finished = finished;
-    if (this.visible) {
-      const scope = new Set(this.scope());
-      for (const entry of added) if (scope.has(entry)) void this.refresh(entry, false);
-      for (const entry of ended) if (scope.has(entry)) void this.refresh(entry, true);
-    }
+    // Shown or not, so Source Control's badge counts every checkout.
+    for (const entry of added) void this.refresh(entry, false);
+    for (const entry of ended) void this.refresh(entry, true);
     this.render();
   }
 
@@ -483,10 +484,9 @@ class ChangesView {
     if (visible) this.refreshScope(false);
   }
 
-  /** Marks the checkouts the view shows whose root `touches` names as stale, reading them again once writes settle. */
+  /** Marks the checkouts whose root `touches` names as stale, reading them again once writes settle. */
   private filesChanged(touches: (root: URI) => boolean): void {
-    if (!this.visible) return;
-    for (const entry of this.scope()) if (touches(pultUri(entry.checkout.environmentId, entry.checkout.root))) this.stale.add(entry);
+    for (const entry of this.entries.values()) if (touches(pultUri(entry.checkout.environmentId, entry.checkout.root))) this.stale.add(entry);
     if (this.stale.size === 0 || this.staleTimer !== undefined) return;
     this.staleTimer = setTimeout(() => {
       this.staleTimer = undefined;
@@ -495,6 +495,11 @@ class ChangesView {
       // A read already under way may predate the change.
       for (const entry of stale) if (this.entries.get(entry.key) === entry) void this.refresh(entry, true);
     }, FILE_CHANGE_DELAY_MS);
+  }
+
+  /** Reads every checkout again, for the badge as much as the view. */
+  refreshAll(): void {
+    for (const entry of this.entries.values()) void this.refresh(entry, false);
   }
 
   /** Reads what the view shows again; `force` asks anew even for a checkout already being read. */
