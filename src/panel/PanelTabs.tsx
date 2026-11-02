@@ -1,4 +1,4 @@
-import { getService, IActivityService, IPaneCompositePartService, IStorageService, IViewDescriptorService } from "@codingame/monaco-vscode-api";
+import { getService, IActivityService, ICommandService, IPaneCompositePartService, IStorageService, IViewDescriptorService } from "@codingame/monaco-vscode-api";
 import { DisposableStore } from "@codingame/monaco-vscode-api/vscode/vs/base/common/lifecycle";
 import { FileAccess } from "@codingame/monaco-vscode-api/vscode/vs/base/common/network";
 import { ThemeIcon } from "@codingame/monaco-vscode-api/vscode/vs/base/common/themables";
@@ -10,6 +10,8 @@ import { useSyncExternalStore } from "react";
 
 /** The stock activity bar's pins, which it keeps while shown; Search and Extensions are unpinned by default (`src/services.ts`). */
 const PINNED_KEY = "workbench.activity.pinnedViewlets2";
+/** Source Control's tab, which opens on every checkout's changes, whatever filter the changes view had (`src/changes/`). */
+const SCM_CONTAINER = "workbench.view.scm";
 
 interface PanelTab {
   readonly id: string;
@@ -30,11 +32,12 @@ interface PanelTab {
  * open one or the badges.
  */
 export async function panelTabStore() {
-  const [views, panes, activities, storage] = await Promise.all([
+  const [views, panes, activities, storage, commands] = await Promise.all([
     getService(IViewDescriptorService),
     getService(IPaneCompositePartService),
     getService(IActivityService),
     getService(IStorageService),
+    getService(ICommandService),
   ]);
 
   const read = (): PanelTab[] => {
@@ -99,7 +102,10 @@ export async function panelTabStore() {
       return () => void listeners.delete(listener);
     },
     get: () => tabs,
-    open: (id: string) => void panes.openPaneComposite(id, ViewContainerLocation.Sidebar, true),
+    open: (id: string) =>
+      void (id === SCM_CONTAINER
+        ? commands.executeCommand("pult-shell.showAllChanges")
+        : panes.openPaneComposite(id, ViewContainerLocation.Sidebar, true)),
   };
 }
 
@@ -112,6 +118,7 @@ export type PanelTabStore = Awaited<ReturnType<typeof panelTabStore>>;
  * (`workbench.activityBar.location`), since at the sidebar's top or bottom
  * it brings the workbench's title bar with it. In Pult's mode the Pult tab
  * has no button (`style.css`): every other tab's Close goes back to it.
+ * Source Control's opens on every checkout's changes, its filter dropped.
  */
 export function PanelTabs({ store }: { store: PanelTabStore }) {
   const tabs = useSyncExternalStore(store.subscribe, store.get);

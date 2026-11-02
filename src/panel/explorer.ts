@@ -153,7 +153,7 @@ async function setScope(next: Scope): Promise<void> {
   (await getService(IStorageService)).store(SCOPE_STORAGE_KEY, next, StorageScope.WORKSPACE, StorageTarget.MACHINE);
 }
 
-/** The thread's own root: its project's, since the store carries no worktree yet. */
+/** The thread's own root: its project's, not its worktree (`checkoutRoot`, which the changes view narrows to). */
 function threadFolder(thread: ShellThread): Folder | undefined {
   if (thread.projectRoot === null) return undefined;
   return { uri: pultUri(thread.environmentId, thread.projectRoot), name: thread.projectName };

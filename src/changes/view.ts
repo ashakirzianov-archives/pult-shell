@@ -9,6 +9,7 @@ import {
   ISCMService,
   ITextModelService,
   IUriIdentityService,
+  IViewsService,
 } from "@codingame/monaco-vscode-api";
 import { Codicon } from "@codingame/monaco-vscode-api/vscode/vs/base/common/codicons";
 import { Emitter, Event } from "@codingame/monaco-vscode-api/vscode/vs/base/common/event";
@@ -22,8 +23,10 @@ import { URI } from "@codingame/monaco-vscode-api/vscode/vs/base/common/uri";
 import type { ITextModel } from "@codingame/monaco-vscode-api/vscode/vs/editor/common/model";
 import { Action2, MenuId, registerAction2 } from "@codingame/monaco-vscode-api/vscode/vs/platform/actions/common/actions";
 import { CommandsRegistry } from "@codingame/monaco-vscode-api/vscode/vs/platform/commands/common/commands";
-import { ContextKeyExpr, type IContextKey } from "@codingame/monaco-vscode-api/vscode/vs/platform/contextkey/common/contextkey";
+import { ContextKeyExpr, RawContextKey, type IContextKey } from "@codingame/monaco-vscode-api/vscode/vs/platform/contextkey/common/contextkey";
+import { Registry } from "@codingame/monaco-vscode-api/vscode/vs/platform/registry/common/platform";
 import { registerColor } from "@codingame/monaco-vscode-api/vscode/vs/platform/theme/common/colorUtils";
+import { Extensions as ViewExtensions, type IViewsRegistry } from "@codingame/monaco-vscode-api/vscode/vs/workbench/common/views";
 import type {
   ISCMProvider,
   ISCMRepository,
@@ -31,38 +34,30 @@ import type {
   ISCMResourceDecorations,
   ISCMResourceGroup,
 } from "@codingame/monaco-vscode-api/vscode/vs/workbench/contrib/scm/common/scm";
-import { ThreadId, type ReviewDiffPreviewSource, type ReviewDiffPreviewSourceKind } from "@t3tools/contracts";
+import { ThreadId, type ReviewDiffPreviewSourceKind } from "@t3tools/contracts";
 
 import type { TurnCheckpoints } from "../../thread-view/shell/main.tsx";
 
 import { pultUri } from "../panel/explorer.ts";
 import { onDidSelectThread, selectedThread, selectThread, type ThreadSelection } from "../threads/selection.ts";
 import { threadProjectIcon } from "../threads/projectIcon.ts";
-import { threadStore } from "../threads/store.ts";
+import { scopedKey, type ShellThread, threadStore } from "../threads/store.ts";
+import { setChangesCard, mountChangesCard } from "./card.tsx";
+import { type Change, type Checkout, checkoutKey, checkoutName, checkoutsOf, shownChanges } from "./checkouts.ts";
 import { type ChangeType, patchFiles } from "./patch.ts";
 import { changesServer } from "./server.ts";
-import { mountTurnCard, setTurnCard } from "./turnCard.tsx";
 
 /** The scheme of a change's two sides, served by the view's content provider from the server's file contents RPC. */
 const DIFF_SCHEME = "pult-diff";
-/** The source control's provider id, which `scmProvider` in menus' `when` names. */
+/** The source controls' provider id, which `scmProvider` in menus' `when` names. */
 const PROVIDER_ID = "pult-shell";
+/** Source Control's view container, whose visibility decides whether the view refreshes. */
+const SCM_CONTAINER = "workbench.view.scm";
+/** How many checkouts' diffs a refresh asks for at once. */
+const REFRESH_CONCURRENCY = 4;
 
-/** A changed file of a source, with what the server's file contents RPC needs to show its sides. */
-interface Change {
-  readonly cwd: string;
-  /** A server's diff source, or a turn's, between its checkpoints. */
-  readonly sourceKind: ReviewDiffPreviewSourceKind | "turn";
-  /** A turn's checkpoint refs, before and after it. */
-  readonly baseRef: string | null;
-  readonly headRef: string | null;
-  /** Relative to `cwd`, after the change. */
-  readonly path: string;
-  readonly previousPath: string | null;
-  readonly changeType: ChangeType;
-  readonly additions: number;
-  readonly deletions: number;
-}
+/** While the view shows one thread's checkout, under its card: for `when` clauses. */
+const ChangesFilteredContext = new RawContextKey<boolean>("pult.changesFiltered", false);
 
 /** The content provider's query: a change and which of its sides. */
 interface Side {
@@ -70,15 +65,17 @@ interface Side {
   readonly side: "old" | "new";
 }
 
-/** The group of a turn the thread view named, alone in the view while the selected thread has one. */
+/** The group of a turn the thread view named, alone in the view while the filter's thread has one. */
 const TURN_GROUP = "turn";
-/** The context key set while the view shows a turn, for "Pult: Close Turn Changes". */
-const TURN_SHOWN_KEY = "pult.turnChangesShown";
 
 const GROUPS: ReadonlyArray<{ readonly id: string; readonly label: string; readonly kind: ReviewDiffPreviewSourceKind }> = [
   { id: "changes", label: "Changes", kind: "branch-range" },
   { id: "working-tree", label: "Working Tree", kind: "working-tree" },
 ];
+
+function groupLabel(kind: ReviewDiffPreviewSourceKind | undefined): string {
+  return GROUPS.find((group) => group.kind === kind)?.label ?? "Changes";
+}
 
 // The badges' colours, which VS Code's git extension registers and this build does not run: its defaults, which themes override.
 registerColor("gitDecoration.modifiedResourceForeground", { dark: "#E2C08D", light: "#895503", hcDark: "#E2C08D", hcLight: "#895503" }, "Modified files in the changes view.");
@@ -100,6 +97,30 @@ const BADGES: Record<ChangeType, { readonly badge: string; readonly icon: ThemeI
   },
 };
 
+/** The live file a change is of. */
+function fileUri(change: Change): URI {
+  return pultUri(change.environmentId, joinPath(change.cwd, change.path));
+}
+
+/** A `pult:` file's key among the decorated, the authority in any case. */
+function decorationKey(uri: URI): string {
+  return `${uri.authority.toLowerCase()}\n${uri.path}`;
+}
+
+function sideUri(change: Change, side: Side["side"]): URI {
+  const path = side === "old" ? (change.previousPath ?? change.path) : change.path;
+  return pultUri(change.environmentId, joinPath(change.cwd, path)).with({
+    scheme: DIFF_SCHEME,
+    query: JSON.stringify({ change, side } satisfies Side),
+  });
+}
+
+/** The diff's sides: the server's old one, and the live file for a working-tree change but a deletion, else the server's new one; a turn's both its checkpoints'. */
+function sides(change: Change): { readonly original: URI; readonly modified: URI } {
+  const live = change.sourceKind === "working-tree" && change.changeType !== "deleted";
+  return { original: sideUri(change, "old"), modified: live ? fileUri(change) : sideUri(change, "new") };
+}
+
 class ChangeResource implements ISCMResource {
   readonly sourceUri: URI;
   readonly decorations: ISCMResourceDecorations;
@@ -112,12 +133,12 @@ class ChangeResource implements ISCMResource {
   constructor(
     readonly resourceGroup: ChangesGroup,
     readonly change: Change,
-    private readonly view: ChangesView,
+    private readonly opener: (change: Change, preserveFocus: boolean) => Promise<void>,
   ) {
-    const sides = view.sides(change);
-    this.sourceUri = view.fileUri(change);
-    this.multiDiffEditorOriginalUri = sides.original;
-    this.multiDiffEditorModifiedUri = sides.modified;
+    const { original, modified } = sides(change);
+    this.sourceUri = fileUri(change);
+    this.multiDiffEditorOriginalUri = original;
+    this.multiDiffEditorModifiedUri = modified;
     const { icon, color, label } = BADGES[change.changeType];
     // A turn's files are history: a badge through the decorations service would mark the live files in the explorer too.
     const turnIcon = change.sourceKind === "turn" ? { ...icon, color: { id: color } } : undefined;
@@ -129,7 +150,7 @@ class ChangeResource implements ISCMResource {
   }
 
   open(preserveFocus: boolean): Promise<void> {
-    return this.view.open(this.change, preserveFocus);
+    return this.opener(this.change, preserveFocus);
   }
 }
 
@@ -174,7 +195,11 @@ class ChangesGroup implements ISCMResourceGroup {
 let providers = 0;
 let inputs = 0;
 
-/** The source control of one root: no input, no history, the turn's group and the server's two. */
+/**
+ * The source control of one checkout: no history, its input box hidden, the
+ * turn's group and the server's two, of which one at most holds files. Each
+ * checkout's own, so a message box and a commit action can be its alone.
+ */
 class ChangesProvider implements ISCMProvider {
   readonly id = `pult-shell.changes.${++providers}`;
   readonly providerId = PROVIDER_ID;
@@ -190,15 +215,18 @@ class ChangesProvider implements ISCMProvider {
   readonly historyProvider = constObservable(undefined);
   readonly actionButton = constObservable(undefined);
   readonly statusBarCommands = constObservable(undefined);
+  readonly iconPath: ThemeIcon;
+  /** What the groups were last filled with, so an unchanged render leaves them be. */
+  rendered: { readonly version: number; readonly turn: Turn | undefined } | undefined;
 
   constructor(
-    /** The root's host path, the server's `cwd`. */
-    readonly root: string,
+    readonly checkout: Checkout,
     readonly rootUri: URI,
     readonly name: string,
     readonly inputBoxTextModel: ITextModel,
     extUri: IExtUri,
   ) {
+    this.iconPath = checkout.worktree === null ? Codicon.repo : Codicon.worktree;
     this.groups = [
       new ChangesGroup(this, TURN_GROUP, "Changed Files", extUri),
       ...GROUPS.map(({ id, label }) => new ChangesGroup(this, id, label, extUri)),
@@ -225,55 +253,74 @@ class ChangesProvider implements ISCMProvider {
   }
 }
 
+/** A checkout's latest diff, and its source control while the view shows it. */
+interface Entry {
+  readonly key: string;
+  readonly checkout: Checkout;
+  /** The one source it shows (`shownChanges`), after the last refresh; undefined before one, without changes, or when it failed. */
+  shown: ReturnType<typeof shownChanges>;
+  /** Bumped on every answer, for the provider's `rendered`. */
+  version: number;
+  failure: string | null;
+  /** The refresh in flight; a newer one's answer wins. */
+  loading: Promise<void> | undefined;
+  generation: number;
+  registered: { readonly repository: ISCMRepository; readonly provider: ChangesProvider } | undefined;
+}
+
 type Services = {
   readonly scm: ISCMService;
   readonly models: IModelService;
-  readonly languages: ILanguageService;
   readonly editors: IEditorService;
   readonly commands: ICommandService;
   readonly extUri: IExtUri;
-  readonly turnShown: IContextKey<boolean>;
+  readonly filteredKey: IContextKey<boolean>;
 };
 
 /**
- * The changes view: VS Code's Source Control view over the selected
- * thread's project, in place of upstream's diff panel (`pult/decisions`,
- * `view-right-panel`). One source control, for the thread's root, with the
- * server's two diff sources as its groups, Changes (the branch against its
- * base) and Working Tree; a resource opens VS Code's diff editor, its old
- * side from the server, its new side the live `pult:` file, or the server's
- * for a deleted file or a committed change. While the selected thread has
- * one, a turn instead, its files alone under Changed Files: the turn the
- * thread view's changed files card last opened for the thread, both sides
- * of each file from the turn's checkpoints, with the turn's card above the
- * view's tree (`turnCard.tsx`) until its clear mark. It follows the shell's
- * selection, and refreshes when the thread's latest run finishes and on
- * "Pult: Refresh Changes".
+ * The changes view: VS Code's Source Control view, in place of upstream's
+ * diff panel (`pult/decisions`, `view-right-panel`). One source control per
+ * checkout of the held environments (`checkouts.ts`: each project's root and
+ * each thread's worktree), and of each the one source it shows, its working
+ * tree while it has uncommitted changes, else its branch against its base; a
+ * resource opens VS Code's diff editor, its old side from the server, its
+ * new side the live `pult:` file, or the server's for a deleted file or a
+ * committed change. With no filter, the checkouts with changes alone; with
+ * one (`pult-shell.showChanges`), the selected thread's checkout, changes or
+ * none, under its card (`card.tsx`), the filter following the selection and
+ * letting the view show everything while no thread is selected; while the
+ * thread has one, a turn instead, its files alone under Changed Files: the
+ * turn the thread view's changed files card last opened for the thread,
+ * both sides of each file from the turn's checkpoints. It refreshes only
+ * while Source Control shows: what it shows, on showing, on "Pult: Refresh
+ * Changes", and a checkout's own when a thread on it finishes a run.
  */
 class ChangesView {
-  private repository:
-    | { readonly repository: ISCMRepository; readonly provider: ChangesProvider; readonly environmentId: string; readonly key: string }
-    | undefined;
+  private readonly entries = new Map<string, Entry>();
+  /** Whether the view is narrowed to the selected thread, while one is. */
+  private filtered = false;
   private selection: ThreadSelection | null = null;
-  private finishedAt: string | null = null;
-  private generation = 0;
-  private pending: Promise<void> = Promise.resolve();
-  private changes = new Map<string, Change>();
-  /** The changes by their `pult:` URI's path, for the decorations. */
-  private byPath = new Map<string, Change>();
-  private readonly contents = new Map<string, Promise<{ readonly oldContents: string; readonly newContents: string }>>();
-  /** Each thread's turn, by `turnKey`, kept while the page lives; a turn's checkpoints never change. */
+  private visible: boolean;
+  /** Each thread's latest run's end, by `scopedKey`, as last seen. */
+  private finished = new Map<string, string | null>();
+  /** Each thread's turn, by `turnKey`, until the filter is cleared or the thread's changes are asked for without one. */
   private readonly turns = new Map<string, Promise<Turn>>();
-  /** The turn the view shows, the selected thread's. */
-  private shownTurn: Turn | undefined;
-  private failure: string | null = null;
+  private readonly loadedTurns = new Map<string, Turn>();
+  /** The decorated files, by `decorationKey`: what the view shows but a turn's. */
+  private decorated = new Map<string, Change>();
+  private readonly contents = new Map<string, Promise<{ readonly oldContents: string; readonly newContents: string }>>();
   private readonly decorationsChanged = new Emitter<URI[]>();
 
-  constructor(private readonly services: Services) {}
+  private constructor(
+    private readonly services: Services,
+    private readonly views: IViewsService,
+  ) {
+    this.visible = views.isViewContainerVisible(SCM_CONTAINER);
+  }
 
-  /** Starts following the selection and the store, with the `pult-diff:` sides and the badges registered. */
+  /** Starts following the store, the selection and Source Control's visibility, with the `pult-diff:` sides and the badges registered. */
   static async start(): Promise<ChangesView> {
-    const [scm, models, languages, editors, commands, textModels, decorations, uriIdentity, contextKeys] = await Promise.all([
+    const [scm, models, languages, editors, commands, textModels, decorations, uriIdentity, contextKeys, views] = await Promise.all([
       getService(ISCMService),
       getService(IModelService),
       getService(ILanguageService),
@@ -283,9 +330,10 @@ class ChangesView {
       getService(IDecorationsService),
       getService(IUriIdentityService),
       getService(IContextKeyService),
+      getService(IViewsService),
     ]);
-    const turnShown = contextKeys.createKey(TURN_SHOWN_KEY, false);
-    const view = new ChangesView({ scm, models, languages, editors, commands, extUri: uriIdentity.extUri, turnShown });
+    const filteredKey = ChangesFilteredContext.bindTo(contextKeys);
+    const view = new ChangesView({ scm, models, editors, commands, extUri: uriIdentity.extUri, filteredKey }, views);
     textModels.registerTextModelContentProvider(DIFF_SCHEME, {
       provideTextContent: async (uri) => {
         const text = await view.sideContents(uri);
@@ -297,198 +345,263 @@ class ChangesView {
       onDidChange: view.decorationsChanged.event,
       provideDecorations: (uri) => view.decoration(uri),
     });
-    onDidSelectThread(() => view.select(selectedThread() ?? null));
-    // The store may load after the selection, and a finished run changes the files.
-    threadStore.subscribe(() => {
-      const finishedAt = view.selected()?.latestRun?.finishedAt ?? null;
-      const finished = finishedAt !== view.finishedAt;
-      view.finishedAt = finishedAt;
-      view.sync(finished);
+    views.onDidChangeViewContainerVisibility(({ id, visible }) => {
+      if (id === SCM_CONTAINER) view.setVisible(visible);
     });
+    onDidSelectThread(() => view.select(selectedThread() ?? null));
+    // The store may load after the selection, adds and drops checkouts, and a finished run changes the files.
+    threadStore.subscribe(() => view.syncStore());
+    view.syncStore();
     view.select(selectedThread() ?? null);
     return view;
   }
 
-  private selected() {
+  /** The thread the view is narrowed to: the selected one, while filtered. */
+  private filterThread(): ShellThread | undefined {
     const selection = this.selection;
-    return selection === null ? undefined : threadStore.thread(selection.environmentId, selection.threadId);
+    return !this.filtered || selection === null ? undefined : threadStore.thread(selection.environmentId, selection.threadId);
   }
 
-  /** The thread whose project the view shows, in its environment; its root decides the source control. */
-  select(selection: ThreadSelection | null): void {
+  private entryOf(thread: ShellThread | undefined): Entry | undefined {
+    const root = thread?.checkoutRoot ?? null;
+    return thread === undefined || root === null ? undefined : this.entries.get(checkoutKey(thread.environmentId, root));
+  }
+
+  /** The checkouts what the view shows comes from: the filter's thread's, or every one. */
+  private scope(): ReadonlyArray<Entry> {
+    const thread = this.filterThread();
+    if (thread === undefined) return [...this.entries.values()];
+    const entry = this.entryOf(thread);
+    return entry === undefined ? [] : [entry];
+  }
+
+  /** The store's checkouts kept, new ones read while the view shows them, and a checkout read again when a thread on it finishes a run. */
+  private syncStore(): void {
+    const state = threadStore.get();
+    const checkouts = checkoutsOf(state);
+    const keys = new Set(checkouts.map((checkout) => checkoutKey(checkout.environmentId, checkout.root)));
+    for (const [key, entry] of this.entries) {
+      if (keys.has(key)) continue;
+      entry.registered?.repository.dispose();
+      this.entries.delete(key);
+    }
+    const added: Entry[] = [];
+    for (const checkout of checkouts) {
+      const key = checkoutKey(checkout.environmentId, checkout.root);
+      if (this.entries.has(key)) continue;
+      const entry: Entry = { key, checkout, shown: undefined, version: 0, failure: null, loading: undefined, generation: 0, registered: undefined };
+      this.entries.set(key, entry);
+      added.push(entry);
+    }
+    const ended = new Set<Entry>();
+    const finished = new Map<string, string | null>();
+    for (const thread of state.threads) {
+      const finishedAt = thread.latestRun?.finishedAt ?? null;
+      const key = scopedKey(thread.environmentId, thread.id);
+      const seen = this.finished.get(key);
+      finished.set(key, finishedAt);
+      if (seen === undefined || seen === finishedAt || finishedAt === null) continue;
+      const entry = this.entryOf(thread);
+      if (entry !== undefined) ended.add(entry);
+    }
+    this.finished = finished;
+    if (this.visible) {
+      const scope = new Set(this.scope());
+      for (const entry of added) if (scope.has(entry)) void this.refresh(entry, false);
+      for (const entry of ended) if (scope.has(entry)) void this.refresh(entry, true);
+    }
+    this.render();
+  }
+
+  /** The selected thread, which the filter follows. */
+  private select(selection: ThreadSelection | null): void {
     this.selection = selection;
-    this.finishedAt = this.selected()?.latestRun?.finishedAt ?? null;
-    this.sync(true);
-    void this.applyTurn();
+    if (this.filtered && this.visible) this.refreshScope(false);
+    this.render();
   }
 
-  private root(thread: NonNullable<ReturnType<ChangesView["selected"]>>): string | undefined {
-    return thread.projectRoot ?? threadStore.project(thread.environmentId, thread.projectId)?.root ?? undefined;
+  private setVisible(visible: boolean): void {
+    this.visible = visible;
+    if (visible) this.refreshScope(false);
   }
 
-  /** The source control follows the selected thread's root as the store knows it; `refresh` reloads an unchanged one too. */
-  private sync(refresh: boolean): void {
-    const thread = this.selected();
-    const environmentId = thread?.environmentId;
-    const root = thread === undefined ? undefined : this.root(thread);
-    if (thread === undefined || environmentId === undefined || root === undefined) {
-      if (this.repository === undefined) return;
-      this.generation += 1;
-      this.repository.repository.dispose();
-      this.repository = undefined;
-      this.apply([]);
-      return;
-    }
-    const key = `${environmentId}\n${root}`;
-    if (this.repository?.key === key) {
-      if (refresh) this.refresh();
-      return;
-    }
-    this.repository?.repository.dispose();
-    const { scm, models, extUri } = this.services;
-    // The input box stays hidden, but the view's input widget takes a model.
-    const input = models.createModel("", null, URI.from({ scheme: "pult-scm-input", path: `/${++inputs}` }));
-    const provider = new ChangesProvider(root, pultUri(environmentId, root), thread.projectName, input, extUri);
-    const repository = scm.registerSCMProvider(provider);
-    repository.input.visible = false;
-    this.repository = { repository, provider, environmentId, key };
-    this.apply([]);
-    this.refresh();
-    void this.applyTurn();
+  /** Reads what the view shows again; `force` asks anew even for a checkout already being read. */
+  refreshScope(force: boolean): void {
+    for (const entry of this.scope()) void this.refresh(entry, force);
+  }
+
+  /** The newest refresh of a checkout wins; an older one's answer is dropped. */
+  private refresh(entry: Entry, force: boolean): Promise<void> {
+    if (entry.loading !== undefined && !force) return entry.loading;
+    const generation = ++entry.generation;
+    const { environmentId, root } = entry.checkout;
+    const current = () => generation === entry.generation && this.entries.get(entry.key) === entry;
+    const loading = limited(() => changesServer(environmentId).diffPreview({ cwd: root })).then(
+      (preview) => {
+        if (!current()) return;
+        entry.failure = null;
+        entry.shown = shownChanges(environmentId, root, preview.sources);
+      },
+      (error: unknown) => {
+        // Not a repository, a worktree gone, or a server without the review calls: no changes to show.
+        if (!current()) return;
+        entry.failure = error instanceof Error ? error.message : String(error);
+        entry.shown = undefined;
+      },
+    );
+    entry.loading = loading.then(() => {
+      if (!current()) return;
+      entry.loading = undefined;
+      entry.version += 1;
+      this.contents.clear();
+      this.render();
+    });
+    return entry.loading;
+  }
+
+  /** The filter's thread's turn, when loaded and read under the thread's checkout. */
+  private shownTurn(): Turn | undefined {
+    const thread = this.filterThread();
+    const selection = this.selection;
+    if (thread === undefined || selection === null) return undefined;
+    const turn = this.loadedTurns.get(turnKey(selection));
+    return turn !== undefined && turn.root === thread.checkoutRoot ? turn : undefined;
   }
 
   /**
-   * The Source Control view, on `thread` selected, with `turn` its turn's
-   * group when given, and the change of `path` open when the view has it,
-   * the turn's first.
+   * The source controls, the card and the badges as the view's state has
+   * them: filtered, the thread's checkout alone, changes or none, its turn
+   * instead while it has one; else every checkout with changes.
+   */
+  private render(): void {
+    const thread = this.filterThread();
+    const narrowed = thread === undefined ? undefined : this.entryOf(thread);
+    const turn = this.shownTurn();
+    const decorated = new Map<string, Change>();
+    for (const entry of this.entries.values()) {
+      const shows = thread === undefined ? entry.shown !== undefined : entry === narrowed;
+      if (!shows) {
+        entry.registered?.repository.dispose();
+        entry.registered = undefined;
+        continue;
+      }
+      entry.registered ??= this.register(entry.checkout);
+      const registered = entry.registered;
+      const entryTurn = entry === narrowed ? turn : undefined;
+      if (entryTurn === undefined) for (const change of entry.shown?.changes ?? []) decorated.set(decorationKey(fileUri(change)), change);
+      const { provider } = registered;
+      if (provider.rendered?.version === entry.version && provider.rendered.turn === entryTurn) continue;
+      provider.rendered = { version: entry.version, turn: entryTurn };
+      const open = (change: Change, preserveFocus: boolean) => this.open(change, preserveFocus);
+      const turnGroup = provider.group(TURN_GROUP);
+      turnGroup.set((entryTurn?.changes ?? []).map((change) => new ChangeResource(turnGroup, change, open)));
+      for (const { id, kind } of GROUPS) {
+        const group = provider.group(id);
+        const changes = entryTurn === undefined && entry.shown?.kind === kind ? entry.shown.changes : [];
+        group.set(changes.map((change) => new ChangeResource(group, change, open)));
+      }
+      provider.changed(entryTurn?.changes.length ?? entry.shown?.changes.length ?? 0);
+    }
+    const previous = this.decorated;
+    this.decorated = decorated;
+    if (!sameKeys(previous, decorated)) {
+      this.decorationsChanged.fire([...previous.values(), ...decorated.values()].map(fileUri));
+    }
+    setChangesCard(
+      thread === undefined
+        ? undefined
+        : {
+            project: threadProjectIcon(thread),
+            group: groupLabel(narrowed?.shown?.kind),
+            turn: turn?.turnCount ?? null,
+            threadTitle: thread.title,
+            branch: thread.branch,
+          },
+    );
+    this.services.filteredKey.set(thread !== undefined);
+  }
+
+  private register(checkout: Checkout): NonNullable<Entry["registered"]> {
+    const { scm, models, extUri } = this.services;
+    // The input box stays hidden, but the view's input widget takes a model.
+    const input = models.createModel("", null, URI.from({ scheme: "pult-scm-input", path: `/${++inputs}` }));
+    const environment = threadStore.distinguishing(checkout.environmentId);
+    const name = environment === undefined ? checkoutName(checkout) : `${checkoutName(checkout)} (${environment})`;
+    const provider = new ChangesProvider(checkout, pultUri(checkout.environmentId, checkout.root), name, input, extUri);
+    const repository = scm.registerSCMProvider(provider);
+    repository.input.visible = false;
+    return { repository, provider };
+  }
+
+  /**
+   * The Source Control view narrowed to `thread`, selected first if another
+   * is, or to the selected thread; with `turn` its turn's files, else its
+   * checkout's; and the change of `path` open when the view has it, the
+   * turn's first.
    */
   async show(thread: ThreadSelection | null, path: string | null, turn: TurnCheckpoints | null): Promise<void> {
+    const target = thread ?? this.selection;
+    this.filtered = true;
+    if (target !== null) {
+      this.forgetTurn(target);
+      const checkoutRoot = threadStore.thread(target.environmentId, target.threadId)?.checkoutRoot ?? null;
+      if (turn !== null && checkoutRoot !== null) this.rememberTurn(target, loadTurn(target, checkoutRoot, turn));
+    }
     const selected = selectedThread();
     if (thread !== null && (thread.threadId !== selected?.threadId || thread.environmentId !== selected.environmentId)) {
       await selectThread(thread.environmentId, thread.threadId);
     }
-    const target = thread ?? this.selection;
-    const root = target === null ? undefined : this.rootOf(target);
-    if (target !== null && turn !== null && root !== undefined) {
-      this.turns.set(turnKey(target), loadTurn(target, root, turn));
-      void this.applyTurn();
-    }
-    await this.services.commands.executeCommand("workbench.view.scm");
-    if (path === null) return;
-    const turnChange = target === null ? undefined : (await this.turnOf(target))?.changes.find((change) => change.path === path);
+    await this.reveal();
+    if (path === null || target === null) return;
+    const turnChange = (await this.turns.get(turnKey(target)))?.changes.find((change) => change.path === path);
     if (turnChange !== undefined) return this.open(turnChange, false);
-    await this.pending;
-    const change = GROUPS.map((group) => this.changes.get(`${group.kind}:${path}`)).find((found) => found !== undefined);
+    const entry = this.entryOf(threadStore.thread(target.environmentId, target.threadId));
+    await entry?.loading;
+    const change = entry?.shown?.changes.find((candidate) => candidate.path === path);
     if (change !== undefined) await this.open(change, false);
   }
 
-  private rootOf(selection: ThreadSelection): string | undefined {
-    const thread = threadStore.thread(selection.environmentId, selection.threadId);
-    return thread === undefined ? undefined : this.root(thread);
+  /** Every checkout's changes, the filter and the turns dropped: the card's clear mark, and the left panel's tab. */
+  async showAll(): Promise<void> {
+    this.filtered = false;
+    this.turns.clear();
+    this.loadedTurns.clear();
+    await this.reveal();
   }
 
-  /** The thread's turn, or undefined when it has none. */
-  private async turnOf(selection: ThreadSelection): Promise<Turn | undefined> {
-    return this.turns.get(turnKey(selection));
+  /** Source Control shown as the view now stands, read again if it showed already; showing it reads it otherwise. */
+  private async reveal(): Promise<void> {
+    const shown = this.visible;
+    this.render();
+    await this.services.commands.executeCommand("workbench.view.scm");
+    if (shown) this.refreshScope(false);
   }
 
-  /** The view shows the selected thread's turn, or the server's sources when it has none. */
-  private async applyTurn(): Promise<void> {
-    const provider = this.repository?.provider;
-    const selection = this.selection;
-    const loaded = selection === null ? undefined : await this.turnOf(selection);
-    if (this.repository?.provider !== provider || this.selection !== selection) return;
-    const turn = provider !== undefined && loaded?.root === provider.root ? loaded : undefined;
-    this.shownTurn = turn;
-    this.services.turnShown.set(turn !== undefined);
-    const thread = this.selected();
-    setTurnCard(
-      turn === undefined || thread === undefined
-        ? undefined
-        : { turnCount: turn.turnCount, threadTitle: thread.title, project: threadProjectIcon(thread) },
-    );
-    this.renderGroups();
+  private rememberTurn(selection: ThreadSelection, loading: Promise<Turn>): void {
+    const key = turnKey(selection);
+    this.turns.set(key, loading);
+    void loading.then((turn) => {
+      if (this.turns.get(key) !== loading) return;
+      this.loadedTurns.set(key, turn);
+      this.render();
+    });
   }
 
-  /** The groups' resources: the shown turn's files alone, or the server's sources. */
-  private renderGroups(): void {
-    const provider = this.repository?.provider;
-    if (provider === undefined) return;
-    const turn = provider.group(TURN_GROUP);
-    turn.set((this.shownTurn?.changes ?? []).map((change) => new ChangeResource(turn, change, this)));
-    for (const { id, kind } of GROUPS) {
-      const group = provider.group(id);
-      const changes = this.shownTurn === undefined ? [...this.changes.values()].filter((change) => change.sourceKind === kind) : [];
-      group.set(changes.map((change) => new ChangeResource(group, change, this)));
-    }
-  }
-
-  /** The selected thread's turn forgotten, the view back to the server's sources: the card's clear mark. */
-  closeTurn(): void {
-    if (this.selection === null) return;
-    this.turns.delete(turnKey(this.selection));
-    void this.applyTurn();
-  }
-
-  /** The newest refresh wins; an older one's answer is dropped. */
-  refresh(): void {
-    const current = this.repository;
-    if (current === undefined) return;
-    const generation = ++this.generation;
-    this.pending = changesServer(current.environmentId).diffPreview({ cwd: current.provider.root }).then(
-      (preview) => {
-        if (generation !== this.generation) return;
-        this.failure = null;
-        this.apply(preview.sources);
-      },
-      (error: unknown) => {
-        // Not a repository, or a server without the review calls: no changes to show.
-        if (generation !== this.generation) return;
-        this.failure = error instanceof Error ? error.message : String(error);
-        this.apply([]);
-      },
-    );
-  }
-
-  private apply(sources: ReadonlyArray<ReviewDiffPreviewSource>): void {
-    const provider = this.repository?.provider;
-    const previous = [...this.changes.values()].map((change) => this.fileUri(change));
-    this.changes = new Map();
-    this.contents.clear();
-    if (provider !== undefined) {
-      for (const { kind } of GROUPS) {
-        const source = sources.find((candidate) => candidate.kind === kind);
-        const changes = source === undefined ? [] : changesOf(provider.root, source);
-        for (const change of changes) this.changes.set(`${kind}:${change.path}`, change);
-      }
-      this.renderGroups();
-      // The badge counts files, not their appearances in both groups.
-      provider.changed(new Set([...this.changes.values()].map((change) => change.path)).size);
-    }
-    const current = [...this.changes.values()].map((change) => this.fileUri(change));
-    this.byPath = new Map([...this.changes.values()].map((change) => [this.fileUri(change).path, change]));
-    this.decorationsChanged.fire([...previous, ...current]);
+  private forgetTurn(selection: ThreadSelection): void {
+    this.turns.delete(turnKey(selection));
+    this.loadedTurns.delete(turnKey(selection));
   }
 
   /** VS Code's diff editor on the change's two sides. */
   async open(change: Change, preserveFocus: boolean): Promise<void> {
-    const { original, modified } = this.sides(change);
-    const group =
-      change.sourceKind === "turn"
-        ? `Turn ${this.shownTurn?.turnCount ?? ""}`.trim()
-        : (GROUPS.find((candidate) => candidate.kind === change.sourceKind)?.label ?? "Changes");
+    const { original, modified } = sides(change);
+    const group = change.sourceKind === "turn" ? `Turn ${this.shownTurn()?.turnCount ?? ""}`.trim() : groupLabel(change.sourceKind);
     await this.services.editors.openEditor({
       original: { resource: original },
       modified: { resource: modified },
       label: `${change.path.split("/").at(-1)} (${group})`,
       options: { pinned: false, preserveFocus },
     });
-  }
-
-  /** The diff's sides: the server's old one, and the live file for a working-tree change but a deletion, else the server's new one; a turn's both its checkpoints'. */
-  sides(change: Change): { readonly original: URI; readonly modified: URI } {
-    const live = change.sourceKind === "working-tree" && change.changeType !== "deleted";
-    return { original: this.sideUri(change, "old"), modified: live ? this.fileUri(change) : this.sideUri(change, "new") };
   }
 
   private async sideContents(uri: URI): Promise<string> {
@@ -517,43 +630,57 @@ class ChangesView {
   }
 
   private decoration(uri: URI) {
-    if (uri.scheme !== "pult" || uri.authority.toLowerCase() !== this.environmentId().toLowerCase()) return undefined;
-    const change = this.byPath.get(uri.path);
+    if (uri.scheme !== "pult") return undefined;
+    const change = this.decorated.get(decorationKey(uri));
     if (change === undefined) return undefined;
     const { badge, color, label } = BADGES[change.changeType];
     return { letter: badge, color, tooltip: label, bubble: true };
   }
 
-  fileUri(change: Change): URI {
-    return pultUri(this.environmentId(), joinPath(change.cwd, change.path));
-  }
-
-  private sideUri(change: Change, side: Side["side"]): URI {
-    const path = side === "old" ? (change.previousPath ?? change.path) : change.path;
-    return pultUri(this.environmentId(), joinPath(change.cwd, path)).with({
-      scheme: DIFF_SCHEME,
-      query: JSON.stringify({ change, side } satisfies Side),
-    });
-  }
-
-  private environmentId(): string {
-    return this.repository?.environmentId ?? "";
-  }
-
   /** What the view shows and why, for the console. */
   state() {
-    const provider = this.repository?.provider;
+    const thread = this.filterThread();
     return {
-      environmentId: this.selection?.environmentId ?? null,
-      threadId: this.selection?.threadId ?? null,
-      root: provider?.root ?? null,
-      groups: Object.fromEntries((provider?.groups ?? []).map((group) => [group.id, group.resources.length])),
-      failure: this.failure,
+      filtered: this.filtered,
+      filter: thread === undefined ? null : { environmentId: thread.environmentId, threadId: thread.id, root: thread.checkoutRoot },
+      turn: this.shownTurn()?.turnCount ?? null,
+      visible: this.visible,
+      checkouts: [...this.entries.values()].map((entry) => ({
+        environmentId: entry.checkout.environmentId,
+        root: entry.checkout.root,
+        name: checkoutName(entry.checkout),
+        shown: entry.registered !== undefined,
+        source: entry.shown?.kind ?? null,
+        files: entry.shown?.changes.length ?? 0,
+        loading: entry.loading !== undefined,
+        failure: entry.failure,
+      })),
     };
   }
 }
 
-/** A turn the changes view shows for a thread: its number, the root it was read under, and its files. */
+function sameKeys(left: ReadonlyMap<string, unknown>, right: ReadonlyMap<string, unknown>): boolean {
+  return left.size === right.size && [...left.keys()].every((key) => right.has(key));
+}
+
+let running = 0;
+const waiting: Array<() => void> = [];
+
+/** `task` once fewer than `REFRESH_CONCURRENCY` others run: every checkout's diff is one call. */
+async function limited<T>(task: () => Promise<T>): Promise<T> {
+  if (running < REFRESH_CONCURRENCY) running += 1;
+  else await new Promise<void>((resolve) => waiting.push(resolve));
+  try {
+    return await task();
+  } finally {
+    // The slot passes to the next waiting task, if any.
+    const next = waiting.shift();
+    if (next === undefined) running -= 1;
+    else next();
+  }
+}
+
+/** A turn the changes view shows for a thread: its number, the checkout it was read under, and its files. */
 interface Turn {
   readonly turnCount: number;
   readonly root: string;
@@ -586,6 +713,7 @@ async function loadTurn(selection: ThreadSelection, root: string, turn: TurnChec
   const changes = turn.files.map((stat): Change => {
     const file = parsed.get(stat.path);
     return {
+      environmentId: selection.environmentId,
       cwd: root,
       sourceKind: "turn",
       baseRef: turn.fromRef,
@@ -628,26 +756,6 @@ async function turnContents(environmentId: string, change: Change): Promise<{ re
   return { oldContents, newContents };
 }
 
-/** A source's files as changes: its stats, with how each changed from its patch; a file the truncated patch missed counts as modified. */
-function changesOf(cwd: string, source: ReviewDiffPreviewSource): Change[] {
-  const parsed = new Map(patchFiles(source.diff).map((file) => [file.path, file]));
-  const stats = source.files ?? [...parsed.values()].map((file) => ({ ...file, additions: 0, deletions: 0 }));
-  return stats.map((stat) => {
-    const file = parsed.get(stat.path);
-    return {
-      cwd,
-      sourceKind: source.kind,
-      baseRef: source.baseRef,
-      headRef: source.headRef,
-      path: stat.path,
-      previousPath: file?.previousPath ?? stat.previousPath,
-      changeType: file?.changeType ?? (stat.previousPath === null ? "change" : "rename-changed"),
-      additions: stat.additions,
-      deletions: stat.deletions,
-    };
-  });
-}
-
 function joinPath(root: string, relativePath: string): string {
   if (relativePath === "") return root;
   return root.endsWith("/") ? `${root}${relativePath}` : `${root}/${relativePath}`;
@@ -656,10 +764,11 @@ function joinPath(root: string, relativePath: string): string {
 let started: Promise<ChangesView> | undefined;
 
 /**
- * Opens the Source Control view on `thread`, selecting it first if another
- * is selected, with `turn` as its turn's group when given, and the change of
- * `path`, relative to its project's root, open when the view lists it: the
- * thread view's "Open diff" and the changed files card's files.
+ * Opens the Source Control view narrowed to `thread`, selecting it first if
+ * another is selected (the selected thread's when null), with `turn` as its
+ * turn's group when given, and the change of `path`, relative to the
+ * thread's checkout, open when the view lists it: the thread's bar's Source
+ * Control, the thread view's "Open diff" and the changed files card's files.
  */
 export async function showChanges(thread: ThreadSelection | null, path: string | null, turn: TurnCheckpoints | null = null): Promise<void> {
   await (await started)?.show(thread, path, turn);
@@ -673,14 +782,15 @@ export async function changesState() {
 /**
  * The changes view, started once the workbench's services are up, with
  * `pult-shell.showChanges <environmentId|null> <threadId|null> <path|null> [turn]`,
- * "Pult: Refresh Changes" (`pult-shell.refreshChanges`, also in the Source
- * Control view's title), "Pult: Close Turn Changes"
- * (`pult-shell.closeTurnChanges`, also the turn's card's clear mark) and the
- * turn's card.
+ * "Pult: Show Thread Changes" (`pult-shell.showThreadChanges`, the selected
+ * thread's), "Pult: Show All Changes" (`pult-shell.showAllChanges`, also the
+ * card's clear mark and the left panel's Source Control tab), "Pult: Refresh
+ * Changes" (`pult-shell.refreshChanges`, also in the Source Control view's
+ * title) and the card.
  */
 export function registerChanges(): void {
   started = ChangesView.start();
-  void mountTurnCard();
+  void mountChangesCard();
   started.catch((error: unknown) => console.error("[pult-shell] the changes view did not start", error));
   CommandsRegistry.registerCommand(
     "pult-shell.showChanges",
@@ -691,20 +801,37 @@ export function registerChanges(): void {
         isTurnCheckpoints(turn) ? turn : null,
       ),
   );
+  // In place of "No source control providers registered.": a checkout without changes has none.
+  Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViewWelcomeContent("workbench.scm", {
+    content: "No changes.",
+    when: ContextKeyExpr.equals("scm.providerCount", 0),
+  });
+  const category = { value: "Pult", original: "Pult" };
   registerAction2(
     class extends Action2 {
       constructor() {
         super({
-          id: "pult-shell.closeTurnChanges",
-          title: { value: "Close Turn Changes", original: "Close Turn Changes" },
-          category: { value: "Pult", original: "Pult" },
+          id: "pult-shell.showThreadChanges",
+          title: { value: "Show Thread Changes", original: "Show Thread Changes" },
+          category,
           f1: true,
-          precondition: ContextKeyExpr.has(TURN_SHOWN_KEY),
+          precondition: ChangesFilteredContext.toNegated(),
         });
       }
 
       async run(): Promise<void> {
-        (await started)?.closeTurn();
+        await showChanges(null, null);
+      }
+    },
+  );
+  registerAction2(
+    class extends Action2 {
+      constructor() {
+        super({ id: "pult-shell.showAllChanges", title: { value: "Show All Changes", original: "Show All Changes" }, category, f1: true });
+      }
+
+      async run(): Promise<void> {
+        await (await started)?.showAll();
       }
     },
   );
@@ -714,15 +841,16 @@ export function registerChanges(): void {
         super({
           id: "pult-shell.refreshChanges",
           title: { value: "Refresh Changes", original: "Refresh Changes" },
-          category: { value: "Pult", original: "Pult" },
+          category,
           icon: Codicon.refresh,
           f1: true,
-          menu: [{ id: MenuId.SCMTitle, group: "navigation", when: ContextKeyExpr.equals("scmProvider", PROVIDER_ID) }],
+          // Every checkout's title, which names a provider only while it shows one.
+          menu: [{ id: MenuId.SCMTitle, group: "navigation" }],
         });
       }
 
       async run(): Promise<void> {
-        (await started)?.refresh();
+        (await started)?.refreshScope(true);
       }
     },
   );

@@ -12,12 +12,14 @@ const FILE_VIEW_ID = "workbench.explorer.fileView";
 /**
  * A stock view's filter as a card above its tree, in the thread cards' look:
  * an icon and a line of text, with a clear mark on hover that `onClear`
- * runs, then a title.
+ * runs, then a title, and a muted line under it with its codicon when given
+ * (Source Control's branch).
  */
 export function ViewFilterCard(props: {
   readonly icon: ReactNode;
   readonly top: string;
   readonly title: string;
+  readonly detail?: { readonly codicon: string; readonly text: string };
   readonly tooltip: string;
   readonly clearTitle: string;
   readonly onClear: () => void;
@@ -36,6 +38,12 @@ export function ViewFilterCard(props: {
         />
       </span>
       <span className="pult-card-title">{props.title}</span>
+      {props.detail === undefined ? null : (
+        <span className="pult-view-card-detail">
+          <i className={`codicon codicon-${props.detail.codicon}`} aria-hidden />
+          <span>{props.detail.text}</span>
+        </span>
+      )}
     </div>
   );
 }
