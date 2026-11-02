@@ -29,7 +29,10 @@ export function getDisplayModelName(
   options?: { preferShortName?: boolean },
 ): string {
   const name = options?.preferShortName && model.shortName ? model.shortName : model.name;
-  return stripLeadingQualifier(name, model.subProvider);
+  return stripLeadingQualifier(name, model.subProvider).replace(
+    /^Claude\s+(?=(?:Opus|Sonnet|Haiku|Fable)\b)/iu,
+    "",
+  );
 }
 
 export function getProviderRowLabel(
