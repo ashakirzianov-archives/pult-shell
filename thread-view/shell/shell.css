@@ -451,6 +451,41 @@ html:not([data-theme-id]) .pult-thread-view {
   display: none;
 }
 
+/* Its environment, checkout and branch pickers in the model picker's look
+   (upstream's larger composer control, as the bar pads it): its height,
+   weight, colour and gap, the icons its size and muted; the bar's gap
+   between them in place of the separator. */
+.pult-composer-bar [data-slot="composer-context-strip"] {
+  gap: var(--pult-bar-gap);
+}
+
+.pult-composer-bar [data-slot="composer-context-strip"] > div {
+  gap: var(--pult-bar-gap);
+}
+
+.pult-composer-bar [data-slot="composer-context-strip"] [data-slot="separator"] {
+  display: none;
+}
+
+.pult-composer-bar [data-slot="composer-context-strip"] :is(button, span[data-composer-context-control]) {
+  height: calc(var(--spacing) * 7);
+  gap: calc(var(--spacing) * 1.5);
+  padding-inline: var(--pult-bar-item-padding);
+  border-inline-width: 0;
+  font-weight: var(--font-weight-medium);
+  color: color-mix(in oklab, var(--foreground) 80%, transparent);
+}
+
+.pult-composer-bar [data-slot="composer-context-strip"] button:hover {
+  color: var(--foreground);
+}
+
+.pult-composer-bar [data-slot="composer-context-strip"] :is(button, span[data-composer-context-control]) svg {
+  width: 1rem;
+  height: 1rem;
+  color: var(--muted-foreground);
+}
+
 /* With its settings and buttons in the bar, the composer is its message
    alone: its emptied footer goes, and the message is one line as tall as
    the resting composer (3rem). The
