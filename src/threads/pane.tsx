@@ -16,6 +16,7 @@ import type { MountedView, ThreadViewMounts } from "../../thread-view/shell/main
 
 import { connection } from "../connection/index.ts";
 import { allowNativeScroll } from "../nativeScroll.ts";
+import { allowNativeTextMenu } from "../nativeTextMenu.ts";
 import { isSettingsTab, type SettingsInput } from "../settings/pane.tsx";
 import { workbenchColorScheme } from "../theme.ts";
 import { ThreadBarEntries } from "./barEntries.tsx";
@@ -179,6 +180,8 @@ class ThreadPane extends SimpleEditorPane {
     element.className = "pult-thread-pane";
     // The view's timeline is a native scroller.
     allowNativeScroll(element);
+    // The composer's message has the browser's menu, with its spelling suggestions.
+    allowNativeTextMenu(element);
     return element;
   }
 

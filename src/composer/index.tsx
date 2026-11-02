@@ -8,6 +8,7 @@ import { createRoot } from "react-dom/client";
 
 import type { MountedView, ViewTarget } from "../../thread-view/shell/main.tsx";
 import { connection } from "../connection/connection.ts";
+import { allowNativeTextMenu } from "../nativeTextMenu.ts";
 import { BarTip } from "../threads/barEntries.tsx";
 import { isShellTab, threadView } from "../threads/pane.tsx";
 import { isSwitchingThread, onDidSelectThread, selectedDraft, selectedThread } from "../threads/selection.ts";
@@ -102,6 +103,7 @@ const INITIAL_HEIGHT = 120;
 function stripView() {
   const element = document.createElement("div");
   element.className = "pult-composer-strip";
+  allowNativeTextMenu(element);
   const content = document.createElement("div");
   content.className = "pult-composer-strip-content";
   element.append(content);

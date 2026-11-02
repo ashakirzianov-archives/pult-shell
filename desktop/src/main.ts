@@ -8,7 +8,19 @@
  */
 import * as NodePath from "node:path";
 
-import { app, BrowserWindow, dialog, ipcMain, Menu, session, shell, type IpcMainInvokeEvent } from "electron";
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  Menu,
+  session,
+  shell,
+  type ContextMenuParams,
+  type IpcMainInvokeEvent,
+  type MenuItemConstructorOptions,
+  type WebContents,
+} from "electron";
 
 import { appDisplayName, appUserDataName } from "../../src/identity.ts";
 import { Channel, TOP_ROW_HEIGHT, VERSION_ARG, type Reply } from "./ipc.ts";
@@ -131,6 +143,12 @@ function openWindow(): void {
     openOutside(event.url);
   });
 
+  // Electron shows no context menu of its own; a text field's, which the page lets through
+  // (`src/nativeTextMenu.ts`), is built here as the browser's: spelling, then editing.
+  window.webContents.on("context-menu", (_event, params) => {
+    if (params.isEditable) Menu.buildFromTemplate(textFieldMenu(window.webContents, params)).popup({ window });
+  });
+
   // The dev server may not be up yet: show the empty window and say so; View, Reload loads it once it is.
   window.webContents.on("did-fail-load", (_event, code, description, url, isMainFrame) => {
     // -3 is ERR_ABORTED, a load replaced by another.
@@ -216,6 +234,29 @@ function sameOrigin(url: string): boolean {
 
 function openOutside(url: string): void {
   if (URL.canParse(url) && ["http:", "https:"].includes(new URL(url).protocol)) void shell.openExternal(url);
+}
+
+/** A text field's context menu: the misspelled word's suggestions and Learn Spelling, then the edit roles. */
+function textFieldMenu(contents: WebContents, params: ContextMenuParams): MenuItemConstructorOptions[] {
+  const { misspelledWord, dictionarySuggestions, editFlags } = params;
+  const spelling: MenuItemConstructorOptions[] =
+    misspelledWord === ""
+      ? []
+      : [
+          ...(dictionarySuggestions.length === 0
+            ? [{ label: "No Guesses Found", enabled: false }]
+            : dictionarySuggestions.map((suggestion) => ({ label: suggestion, click: () => contents.replaceMisspelling(suggestion) }))),
+          { label: "Learn Spelling", click: () => contents.session.addWordToSpellCheckerDictionary(misspelledWord) },
+          { type: "separator" },
+        ];
+  return [
+    ...spelling,
+    { role: "cut", enabled: editFlags.canCut },
+    { role: "copy", enabled: editFlags.canCopy },
+    { role: "paste", enabled: editFlags.canPaste },
+    { type: "separator" },
+    { role: "selectAll", enabled: editFlags.canSelectAll },
+  ];
 }
 
 /** The stock menu: the app's, Edit, View (Reload and the DevTools in development), Window. */
