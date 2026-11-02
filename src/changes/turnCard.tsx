@@ -30,8 +30,9 @@ export function setTurnCard(next: TurnCardState | undefined): void {
 
 /**
  * Source Control's filter while the changes view shows a turn, as the
- * Explorer tab's is: the project's icon, "Turn N", then the thread's
- * title; its clear mark is "Pult: Close Turn Changes".
+ * Explorer tab's is: the project's icon, its name and the turn's number
+ * ("pult / Turn 5"), then the thread's title; its clear mark is "Pult:
+ * Close Turn Changes".
  */
 function TurnCard() {
   const turn = useSyncExternalStore(turnCard.subscribe, turnCard.get);
@@ -40,9 +41,9 @@ function TurnCard() {
   return (
     <ViewFilterCard
       icon={<img className="pult-card-icon" src={projectIconUri(turn.project).toString(true)} alt="" />}
-      top={`Turn ${turn.turnCount}`}
+      top={`${turn.project.name} / Turn ${turn.turnCount}`}
       title={turn.threadTitle}
-      tooltip={`Only turn ${turn.turnCount}'s changes, ${turn.project.name}`}
+      tooltip={`Only turn ${turn.turnCount}'s changes`}
       clearTitle="Clear the filter: show the project's changes"
       onClear={() => runCommand("pult-shell.closeTurnChanges")}
     />
