@@ -99,7 +99,9 @@ export function changesOf(environmentId: string, cwd: string, source: ReviewDiff
  * The one source a checkout shows, with its changes: the working tree while
  * it has uncommitted changes, else the branch against its base, since the
  * server's branch range repeats the uncommitted ones
- * (`pult/issues/committed-only-branch-diff`); undefined with neither.
+ * (`pult/issues/committed-only-branch-diff`), but for a branch whose base is
+ * its own upstream, whose range is only its unpushed commits; undefined with
+ * neither.
  */
 export function shownChanges(
   environmentId: string,
@@ -108,8 +110,14 @@ export function shownChanges(
 ): { readonly kind: ReviewDiffPreviewSourceKind; readonly changes: ReadonlyArray<Change> } | undefined {
   for (const kind of ["working-tree", "branch-range"] as const) {
     const source = sources.find((candidate) => candidate.kind === kind);
-    const changes = source === undefined ? [] : changesOf(environmentId, cwd, source);
+    const changes = source === undefined || againstOwnUpstream(source) ? [] : changesOf(environmentId, cwd, source);
     if (changes.length > 0) return { kind, changes };
   }
   return undefined;
+}
+
+/** Whether a branch range is the branch against itself on a remote (`main` against `origin/main`), as the server picks for the default branch. */
+function againstOwnUpstream({ kind, baseRef, headRef }: ReviewDiffPreviewSource): boolean {
+  if (kind !== "branch-range" || baseRef === null || headRef === null) return false;
+  return baseRef === headRef || baseRef.slice(baseRef.indexOf("/") + 1) === headRef;
 }

@@ -47,12 +47,12 @@ describe("checkoutsOf", () => {
   });
 });
 
-const source = (kind: ReviewDiffPreviewSource["kind"], paths: ReadonlyArray<string>): ReviewDiffPreviewSource => ({
+const source = (kind: ReviewDiffPreviewSource["kind"], paths: ReadonlyArray<string>, branch = "fix"): ReviewDiffPreviewSource => ({
   id: kind,
   kind,
   title: kind,
-  baseRef: kind === "branch-range" ? "main" : null,
-  headRef: null,
+  baseRef: kind === "branch-range" ? "origin/main" : "HEAD",
+  headRef: kind === "branch-range" ? branch : null,
   diff: "",
   diffHash: "hash",
   truncated: false,
@@ -69,6 +69,10 @@ describe("shownChanges", () => {
   test("shows the branch's changes once everything is committed", () => {
     const shown = shownChanges("a", "/repo", [source("working-tree", []), source("branch-range", ["a.ts"])]);
     assert.equal(shown?.kind, "branch-range");
+  });
+
+  test("shows nothing once the base branch is committed, its unpushed commits being no branch's changes", () => {
+    assert.equal(shownChanges("a", "/repo", [source("working-tree", []), source("branch-range", ["a.ts"], "main")]), undefined);
   });
 
   test("shows nothing without changes", () => {
