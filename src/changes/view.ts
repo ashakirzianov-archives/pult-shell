@@ -6,6 +6,9 @@ import {
   IEditorService,
   ILanguageService,
   IModelService,
+  INotificationService,
+  IProgressService,
+  IQuickInputService,
   ISCMService,
   ITextModelService,
   IUriIdentityService,
@@ -24,17 +27,19 @@ import type { ITextModel } from "@codingame/monaco-vscode-api/vscode/vs/editor/c
 import { Action2, MenuId, registerAction2 } from "@codingame/monaco-vscode-api/vscode/vs/platform/actions/common/actions";
 import { CommandsRegistry } from "@codingame/monaco-vscode-api/vscode/vs/platform/commands/common/commands";
 import { ContextKeyExpr, RawContextKey, type IContextKey } from "@codingame/monaco-vscode-api/vscode/vs/platform/contextkey/common/contextkey";
+import { ProgressLocation } from "@codingame/monaco-vscode-api/vscode/vs/platform/progress/common/progress";
 import { Registry } from "@codingame/monaco-vscode-api/vscode/vs/platform/registry/common/platform";
 import { registerColor } from "@codingame/monaco-vscode-api/vscode/vs/platform/theme/common/colorUtils";
 import { Extensions as ViewExtensions, type IViewsRegistry } from "@codingame/monaco-vscode-api/vscode/vs/workbench/common/views";
 import type {
+  ISCMActionButtonDescriptor,
   ISCMProvider,
   ISCMRepository,
   ISCMResource,
   ISCMResourceDecorations,
   ISCMResourceGroup,
 } from "@codingame/monaco-vscode-api/vscode/vs/workbench/contrib/scm/common/scm";
-import { ThreadId, type ReviewDiffPreviewSourceKind } from "@t3tools/contracts";
+import { ProjectId, ThreadId, type ReviewDiffPreviewSourceKind } from "@t3tools/contracts";
 
 import type { TurnCheckpoints } from "../../thread-view/shell/main.tsx";
 
@@ -44,6 +49,7 @@ import { threadProjectIcon } from "../threads/projectIcon.ts";
 import { scopedKey, type ShellThread, threadStore } from "../threads/store.ts";
 import { setChangesCard, mountChangesCard } from "./card.tsx";
 import { type Change, type Checkout, checkoutKey, checkoutName, checkoutsOf, shownChanges } from "./checkouts.ts";
+import { COMMIT_STARTED, commitFailure, commitPlaceholder, type CommitProgress, commitProgress } from "./commit.ts";
 import { type ChangeType, patchFiles } from "./patch.ts";
 import { changesServer } from "./server.ts";
 
@@ -55,6 +61,8 @@ const PROVIDER_ID = "pult-shell";
 const SCM_CONTAINER = "workbench.view.scm";
 /** How many checkouts' diffs a refresh asks for at once. */
 const REFRESH_CONCURRENCY = 4;
+/** Commits a checkout, the one its key names, else the filter's or a pick of those shown with uncommitted changes. */
+const COMMIT_COMMAND = "pult-shell.commit";
 
 /** While the view shows one thread's checkout, under its card: for `when` clauses. */
 const ChangesFilteredContext = new RawContextKey<boolean>("pult.changesFiltered", false);
@@ -196,9 +204,9 @@ let providers = 0;
 let inputs = 0;
 
 /**
- * The source control of one checkout: no history, its input box hidden, the
- * turn's group and the server's two, of which one at most holds files. Each
- * checkout's own, so a message box and a commit action can be its alone.
+ * The source control of one checkout: no history, the turn's group and the
+ * server's two, of which one at most holds files, and its commit message box
+ * with the Commit button under it, Cmd+Enter in the box committing too.
  */
 class ChangesProvider implements ISCMProvider {
   readonly id = `pult-shell.changes.${++providers}`;
@@ -213,8 +221,11 @@ class ChangesProvider implements ISCMProvider {
   readonly commitTemplate = constObservable("");
   readonly artifactProvider = constObservable(undefined);
   readonly historyProvider = constObservable(undefined);
-  readonly actionButton = constObservable(undefined);
+  /** The Commit button, set by the view as the checkout's changes and its commit go. */
+  readonly actionButton = observableValue<ISCMActionButtonDescriptor | undefined>(this, undefined);
   readonly statusBarCommands = constObservable(undefined);
+  /** Cmd+Enter in the message box, through the workbench's `scm.acceptInput`. */
+  readonly acceptInputCommand: NonNullable<ISCMProvider["acceptInputCommand"]>;
   readonly iconPath: ThemeIcon;
   /** What the groups were last filled with, so an unchanged render leaves them be. */
   rendered: { readonly version: number; readonly turn: Turn | undefined } | undefined;
@@ -226,6 +237,7 @@ class ChangesProvider implements ISCMProvider {
     readonly inputBoxTextModel: ITextModel,
     extUri: IExtUri,
   ) {
+    this.acceptInputCommand = { id: COMMIT_COMMAND, title: "Commit", arguments: [checkoutKey(checkout.environmentId, checkout.root)] };
     this.iconPath = checkout.worktree === null ? Codicon.repo : Codicon.worktree;
     this.groups = [
       new ChangesGroup(this, TURN_GROUP, "Changed Files", extUri),
@@ -266,6 +278,10 @@ interface Entry {
   loading: Promise<void> | undefined;
   generation: number;
   registered: { readonly repository: ISCMRepository; readonly provider: ChangesProvider } | undefined;
+  /** The message box's text, kept while the view does not show the checkout; null until it first shows. */
+  message: string | null;
+  /** The commit under way, as its progress events have it. */
+  committing: CommitProgress | undefined;
 }
 
 type Services = {
@@ -273,6 +289,9 @@ type Services = {
   readonly models: IModelService;
   readonly editors: IEditorService;
   readonly commands: ICommandService;
+  readonly notifications: INotificationService;
+  readonly progress: IProgressService;
+  readonly quickInput: IQuickInputService;
   readonly extUri: IExtUri;
   readonly filteredKey: IContextKey<boolean>;
 };
@@ -293,7 +312,9 @@ type Services = {
  * turn the thread view's changed files card last opened for the thread,
  * both sides of each file from the turn's checkpoints. It refreshes only
  * while Source Control shows: what it shows, on showing, on "Pult: Refresh
- * Changes", and a checkout's own when a thread on it finishes a run.
+ * Changes", and a checkout's own when a thread on it finishes a run. Each
+ * checkout shown has a message box and a Commit button, which commit its
+ * whole working tree through the server (`commit`), but under a turn.
  */
 class ChangesView {
   private readonly entries = new Map<string, Entry>();
@@ -320,20 +341,27 @@ class ChangesView {
 
   /** Starts following the store, the selection and Source Control's visibility, with the `pult-diff:` sides and the badges registered. */
   static async start(): Promise<ChangesView> {
-    const [scm, models, languages, editors, commands, textModels, decorations, uriIdentity, contextKeys, views] = await Promise.all([
-      getService(ISCMService),
-      getService(IModelService),
-      getService(ILanguageService),
-      getService(IEditorService),
-      getService(ICommandService),
-      getService(ITextModelService),
-      getService(IDecorationsService),
-      getService(IUriIdentityService),
-      getService(IContextKeyService),
-      getService(IViewsService),
-    ]);
+    const [scm, models, languages, editors, commands, textModels, decorations, uriIdentity, contextKeys, views, notifications, progress, quickInput] =
+      await Promise.all([
+        getService(ISCMService),
+        getService(IModelService),
+        getService(ILanguageService),
+        getService(IEditorService),
+        getService(ICommandService),
+        getService(ITextModelService),
+        getService(IDecorationsService),
+        getService(IUriIdentityService),
+        getService(IContextKeyService),
+        getService(IViewsService),
+        getService(INotificationService),
+        getService(IProgressService),
+        getService(IQuickInputService),
+      ]);
     const filteredKey = ChangesFilteredContext.bindTo(contextKeys);
-    const view = new ChangesView({ scm, models, editors, commands, extUri: uriIdentity.extUri, filteredKey }, views);
+    const view = new ChangesView(
+      { scm, models, editors, commands, notifications, progress, quickInput, extUri: uriIdentity.extUri, filteredKey },
+      views,
+    );
     textModels.registerTextModelContentProvider(DIFF_SCHEME, {
       provideTextContent: async (uri) => {
         const text = await view.sideContents(uri);
@@ -389,7 +417,18 @@ class ChangesView {
     for (const checkout of checkouts) {
       const key = checkoutKey(checkout.environmentId, checkout.root);
       if (this.entries.has(key)) continue;
-      const entry: Entry = { key, checkout, shown: undefined, version: 0, failure: null, loading: undefined, generation: 0, registered: undefined };
+      const entry: Entry = {
+        key,
+        checkout,
+        shown: undefined,
+        version: 0,
+        failure: null,
+        loading: undefined,
+        generation: 0,
+        registered: undefined,
+        message: null,
+        committing: undefined,
+      };
       this.entries.set(key, entry);
       added.push(entry);
     }
@@ -485,10 +524,11 @@ class ChangesView {
         entry.registered = undefined;
         continue;
       }
-      entry.registered ??= this.register(entry.checkout);
+      entry.registered ??= this.register(entry);
       const registered = entry.registered;
       const entryTurn = entry === narrowed ? turn : undefined;
       if (entryTurn === undefined) for (const change of entry.shown?.changes ?? []) decorated.set(decorationKey(fileUri(change)), change);
+      this.syncCommit(entry, entryTurn !== undefined);
       const { provider } = registered;
       if (provider.rendered?.version === entry.version && provider.rendered.turn === entryTurn) continue;
       provider.rendered = { version: entry.version, turn: entryTurn };
@@ -521,16 +561,147 @@ class ChangesView {
     this.services.filteredKey.set(thread !== undefined);
   }
 
-  private register(checkout: Checkout): NonNullable<Entry["registered"]> {
+  /** A checkout's source control, its message box holding what the user last typed in it. */
+  private register(entry: Entry): NonNullable<Entry["registered"]> {
     const { scm, models, extUri } = this.services;
-    // The input box stays hidden, but the view's input widget takes a model.
+    const { checkout } = entry;
+    // The view's input widget takes the model; the input's value is what it holds.
     const input = models.createModel("", null, URI.from({ scheme: "pult-scm-input", path: `/${++inputs}` }));
     const environment = threadStore.distinguishing(checkout.environmentId);
     const name = environment === undefined ? checkoutName(checkout) : `${checkoutName(checkout)} (${environment})`;
     const provider = new ChangesProvider(checkout, pultUri(checkout.environmentId, checkout.root), name, input, extUri);
     const repository = scm.registerSCMProvider(provider);
-    repository.input.visible = false;
+    // The input starts from its history's latest entry, which holds the text a reload left in the box: the checkout's first
+    // showing takes it, a later one the text the box held when the view last showed the checkout.
+    if (entry.message === null) entry.message = repository.input.value;
+    else repository.input.setValue(entry.message, true);
+    repository.input.onDidChange(({ value }) => {
+      if (entry.registered?.repository === repository) entry.message = value;
+    });
     return { repository, provider };
+  }
+
+  /** The thread a commit of the checkout names, for the server's project settings: the filter's, when on it, else the first on it. */
+  private threadOn(entry: Entry): ShellThread | undefined {
+    const filtered = this.filterThread();
+    if (filtered !== undefined && this.entryOf(filtered) === entry) return filtered;
+    return threadStore.get().threads.find((thread) => this.entryOf(thread) === entry);
+  }
+
+  /**
+   * The checkout's message box and Commit button: hidden under a turn, which
+   * is history, else the box with its branch in the placeholder, and the
+   * button, enabled while the working tree has changes and no commit runs,
+   * showing the commit's step while one does.
+   */
+  private syncCommit(entry: Entry, turnShown: boolean): void {
+    const registered = entry.registered;
+    if (registered === undefined) return;
+    const { repository, provider } = registered;
+    if (repository.input.visible === turnShown) repository.input.visible = !turnShown;
+    // A worktree's branch is its own; a project's root records none, but the filter's thread on it does.
+    const filtered = this.filterThread();
+    const branch = entry.checkout.worktree?.branch ?? (filtered !== undefined && this.entryOf(filtered) === entry ? filtered.branch : null);
+    const placeholder = commitPlaceholder(branch);
+    if (repository.input.placeholder !== placeholder) repository.input.placeholder = placeholder;
+    const committing = entry.committing;
+    const on = branch === null ? "" : ` on "${branch}"`;
+    const button: ISCMActionButtonDescriptor | undefined = turnShown
+      ? undefined
+      : {
+          command: {
+            id: COMMIT_COMMAND,
+            title: committing === undefined ? "$(check) Commit" : `$(loading~spin) ${committing.label}`,
+            tooltip: committing === undefined ? `Commit All Changes${on}, untracked files included; with no message, the server writes one` : committing.label,
+            arguments: [entry.key],
+          },
+          enabled: committing === undefined && entry.shown?.kind === "working-tree",
+        };
+    if (JSON.stringify(button) !== JSON.stringify(provider.actionButton.get())) provider.actionButton.set(button, undefined);
+  }
+
+  /**
+   * Commits every change of the checkout's working tree, untracked files
+   * included, with the message box's text, or with none a message the
+   * server writes; the box cleared on a commit, kept on a failure, which a
+   * notification tells with the server's message, and the checkout read
+   * again either way, since a hook may have changed its files.
+   */
+  async commit(entry: Entry): Promise<void> {
+    if (entry.committing !== undefined) return;
+    const { environmentId, root, projectId } = entry.checkout;
+    const name = entry.registered?.provider.name ?? checkoutName(entry.checkout);
+    const message = (entry.message ?? "").trim();
+    const thread = this.threadOn(entry);
+    let latest = COMMIT_STARTED;
+    const progressed = (next: CommitProgress) => {
+      latest = next;
+      entry.committing = next;
+      this.syncCommit(entry, entry.registered?.provider.rendered?.turn !== undefined);
+    };
+    progressed(COMMIT_STARTED);
+    const { notifications, progress } = this.services;
+    try {
+      await progress.withProgress({ location: ProgressLocation.Scm }, () =>
+        changesServer(environmentId).runStackedAction(
+          {
+            actionId: globalThis.crypto.randomUUID(),
+            cwd: root,
+            action: "commit",
+            ...(message === "" ? {} : { commitMessage: message }),
+            ...(thread === undefined ? {} : { threadId: ThreadId.make(thread.id) }),
+            projectId: ProjectId.make(projectId),
+          },
+          (event) => progressed(commitProgress(latest, event)),
+        ),
+      );
+      const { result } = latest;
+      if (result?.commit.status === "skipped_no_changes") {
+        notifications.info(`Pult: nothing to commit in ${name}.`);
+      } else if (result?.commit.status === "created") {
+        entry.message = "";
+        // Not transient, so the message joins the box's history.
+        entry.registered?.repository.input.setValue("", false);
+        if (message === "") notifications.info(`Pult: ${[result.toast.title, result.toast.description].filter(Boolean).join(": ")}`);
+      }
+    } catch (error) {
+      console.error("[pult-shell] the commit failed", error);
+      notifications.error(`Pult could not commit in ${name}. ${commitFailure(latest, error)}`);
+    } finally {
+      entry.committing = undefined;
+      this.syncCommit(entry, entry.registered?.provider.rendered?.turn !== undefined);
+    }
+    if (this.entries.get(entry.key) === entry) void this.refresh(entry, true);
+  }
+
+  /** `pult-shell.commit [checkoutKey]`: the checkout named, else the filter's, else one of those shown with uncommitted changes, picked while several. */
+  async commitCommand(key: string | null): Promise<void> {
+    if (key !== null) {
+      const entry = this.entries.get(key);
+      if (entry !== undefined) await this.commit(entry);
+      return;
+    }
+    const thread = this.filterThread();
+    const narrowed = thread === undefined ? undefined : this.entryOf(thread);
+    const candidates =
+      narrowed !== undefined
+        ? [narrowed]
+        : [...this.entries.values()].filter((entry) => entry.registered !== undefined && entry.shown?.kind === "working-tree");
+    if (candidates.length === 0) {
+      this.services.notifications.info("Pult: no checkout the changes view shows has uncommitted changes.");
+      return;
+    }
+    if (candidates.length === 1) return this.commit(candidates[0]!);
+    const picked = await this.services.quickInput.pick(
+      candidates.map((entry) => ({
+        label: entry.registered?.provider.name ?? checkoutName(entry.checkout),
+        description: entry.checkout.root,
+        detail: (entry.message ?? "").trim().split("\n")[0] || "No message: the server writes one",
+        entry,
+      })),
+      { placeHolder: "Commit all changes of" },
+    );
+    if (picked !== undefined) await this.commit(picked.entry);
   }
 
   /**
@@ -654,6 +825,7 @@ class ChangesView {
         files: entry.shown?.changes.length ?? 0,
         loading: entry.loading !== undefined,
         failure: entry.failure,
+        committing: entry.committing?.label ?? null,
       })),
     };
   }
@@ -786,7 +958,8 @@ export async function changesState() {
  * thread's), "Pult: Show All Changes" (`pult-shell.showAllChanges`, also the
  * card's clear mark and the left panel's Source Control tab), "Pult: Refresh
  * Changes" (`pult-shell.refreshChanges`, also in the Source Control view's
- * title) and the card.
+ * title), "Pult: Commit" (`pult-shell.commit [checkoutKey]`, also each
+ * checkout's Commit button and Cmd+Enter in its message box) and the card.
  */
 export function registerChanges(): void {
   started = ChangesView.start();
@@ -832,6 +1005,17 @@ export function registerChanges(): void {
 
       async run(): Promise<void> {
         await (await started)?.showAll();
+      }
+    },
+  );
+  registerAction2(
+    class extends Action2 {
+      constructor() {
+        super({ id: COMMIT_COMMAND, title: { value: "Commit", original: "Commit" }, category, f1: true });
+      }
+
+      async run(_accessor: unknown, key: unknown): Promise<void> {
+        await (await started)?.commitCommand(typeof key === "string" ? key : null);
       }
     },
   );
