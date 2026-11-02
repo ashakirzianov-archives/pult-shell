@@ -74,7 +74,8 @@ export function workbenchServices(): IEditorOverrideServices {
           { id: "workbench.view.search", pinned: false, visible: false, order: 1 },
           { id: "workbench.view.extensions", pinned: false, visible: false, order: 4 },
         ]),
-        // The first tab of a fresh profile: the registry's default is the explorer, registered first.
+        // The tab a reload restores while none is stored, as none is while the registry's default, the
+        // explorer, registered first, is open; a start that is no reload shows Pult's (`src/panel/view.tsx`).
         "workbench.sidebar.activeviewletid": "pult.panel",
       },
     }),

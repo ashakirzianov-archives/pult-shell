@@ -1,10 +1,11 @@
-import { getService, IWorkbenchLayoutService } from "@codingame/monaco-vscode-api";
+import { getService, ILifecycleService, IPaneCompositePartService, IWorkbenchLayoutService } from "@codingame/monaco-vscode-api";
 import { Codicon } from "@codingame/monaco-vscode-api/vscode/vs/base/common/codicons";
 import { KeyCode } from "@codingame/monaco-vscode-api/vscode/vs/base/common/keyCodes";
 import { Action2, MenuId, registerAction2 } from "@codingame/monaco-vscode-api/vscode/vs/platform/actions/common/actions";
 import { ContextKeyExpr } from "@codingame/monaco-vscode-api/vscode/vs/platform/contextkey/common/contextkey";
 import { KeybindingWeight } from "@codingame/monaco-vscode-api/vscode/vs/platform/keybinding/common/keybindingsRegistry";
 import { Parts } from "@codingame/monaco-vscode-api/vscode/vs/workbench/services/layout/browser/layoutService";
+import { LifecyclePhase, StartupKind } from "@codingame/monaco-vscode-api/vscode/vs/workbench/services/lifecycle/common/lifecycle";
 import { registerCustomView, ViewContainerLocation } from "@codingame/monaco-vscode-workbench-service-override/common";
 import { createRoot } from "react-dom/client";
 
@@ -61,6 +62,7 @@ export function registerPanel(): void {
       return { dispose: () => root.unmount() };
     },
   });
+  void showPultTabOnStart();
   registerCloseTabAction();
   registerExplorerCommands();
   registerJumps();
@@ -68,6 +70,23 @@ export function registerPanel(): void {
   void mountFilterCard();
   registerSidebarToggle("pult-shell.collapsePanel", "Collapse Panel", true);
   registerSidebarToggle("pult-shell.expandPanel", "Expand Panel", false);
+}
+
+/**
+ * The Pult tab on a start that is no reload: the workbench opens the
+ * registry's default sidebar tab then, which is the Explorer, registered
+ * before Pult's container can be (a reload restores the tab it left, the
+ * Explorer's falling back to Pult's, `src/services.ts`). Leaves a collapsed
+ * sidebar collapsed, and the focus where it is.
+ */
+async function showPultTabOnStart(): Promise<void> {
+  const lifecycle = await getService(ILifecycleService);
+  if (lifecycle.startupKind === StartupKind.ReloadedWindow) return;
+  await lifecycle.when(LifecyclePhase.Restored);
+  const layout = await getService(IWorkbenchLayoutService);
+  const panes = await getService(IPaneCompositePartService);
+  if (!layout.isVisible(Parts.SIDEBAR_PART) || panes.getActivePaneComposite(ViewContainerLocation.Sidebar)?.getId() === PANEL_ID) return;
+  await panes.openPaneComposite(PANEL_ID, ViewContainerLocation.Sidebar, false);
 }
 
 /**
