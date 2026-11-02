@@ -31,10 +31,7 @@ export function CollapsibleHeader({
 
 /** A collapsible's state, kept in localStorage under `key`; collapsed until opened, or with `initial` open until closed. */
 export function useExpanded(key: string, initial = false): [boolean, (expanded: boolean) => void] {
-  const [expanded, setExpanded] = useState(() => {
-    const stored = localStorage.getItem(key);
-    return stored === null ? initial : stored === "true";
-  });
+  const [expanded, setExpanded] = useState(() => storedExpanded(key, initial));
   return [
     expanded,
     (next) => {
@@ -42,4 +39,10 @@ export function useExpanded(key: string, initial = false): [boolean, (expanded: 
       setExpanded(next);
     },
   ];
+}
+
+/** A collapsible's state as `useExpanded` keeps it, for code outside its component: the jumps (`jump.ts`). */
+export function storedExpanded(key: string, initial = false): boolean {
+  const stored = localStorage.getItem(key);
+  return stored === null ? initial : stored === "true";
 }

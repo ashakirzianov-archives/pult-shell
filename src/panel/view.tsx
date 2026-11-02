@@ -12,6 +12,7 @@ import markUrl from "../../assets/pult/mark.svg?no-inline";
 import { allowNativeScroll } from "../nativeScroll.ts";
 import { followExplorerScope, PANEL_ID, registerExplorerCommands, showThreads } from "./explorer.ts";
 import { mountFilterCard } from "./filterCard.tsx";
+import { registerJumps } from "./jump.ts";
 import { PanelView } from "./PanelView.tsx";
 import "./panel.css";
 
@@ -37,8 +38,9 @@ const THREADS_ORDER = -1;
  * other tab of the sidebar closes back to the Pult tab, which in Pult's
  * mode has no button of its own. Collapsing is the sidebar's: the header's
  * toggle, Cmd+B and the palette's Collapse Panel; while it is collapsed,
- * Expand Panel sits at the window's top-left (`rows.tsx`). Registered
- * before the workbench starts.
+ * Expand Panel sits at the window's top-left (`rows.tsx`). Cmd+1 to Cmd+9
+ * jump to the panel's rows (`jump.ts`). Registered before the workbench
+ * starts.
  */
 export function registerPanel(): void {
   registerCustomView({
@@ -61,6 +63,7 @@ export function registerPanel(): void {
   });
   registerCloseTabAction();
   registerExplorerCommands();
+  registerJumps();
   void followExplorerScope();
   void mountFilterCard();
   registerSidebarToggle("pult-shell.collapsePanel", "Collapse Panel", true);

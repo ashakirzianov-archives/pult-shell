@@ -6,7 +6,7 @@ import { settleThread, showSnoozeMenu, showThreadMenu, unsettleThread, wakeThrea
 import { parkActions } from "../threads/parking.ts";
 import { NO_THREAD_FEATURES } from "../threads/presentation.ts";
 import { projectIconUri, threadProjectIcon, useProjectIcons } from "../threads/projectIcon.ts";
-import { explorerSelected, onDidSelectThread, selectedDraft, selectedThread } from "../threads/selection.ts";
+import { onDidSelectThread, selectedDraft } from "../threads/selection.ts";
 import {
   isSubagent,
   scopedKey,
@@ -19,33 +19,17 @@ import { CollapsibleHeader, useExpanded } from "./collapsible.tsx";
 import { DraftCard, EnvironmentChip } from "./DraftCard.tsx";
 import { type ProjectDraft, projectDrafts } from "./drafts.ts";
 import { ExplorerShelf } from "./ExplorerShelf.tsx";
+import { EXPANDED_KEYS, selectionSnapshot, showingSettled } from "./jump.ts";
+import { JumpHint } from "./JumpHint.tsx";
+import { draftCards as draftCardsOf, draftKey, keyOf, SETTLED_TAIL_INITIAL_COUNT, SETTLED_TAIL_PAGE_COUNT, settledTail } from "./order.ts";
 
 function run(command: string, ...args: unknown[]): void {
   void getService(ICommandService).then((commands) => commands.executeCommand(command, ...args));
 }
 
-/** A thread's identity across environments (`scopedKey`), which the selection and the panel's maps go by. */
-const keyOf = (thread: ShellThread) => scopedKey(thread.environmentId, thread.id);
-
-/** What the editor part shows, as a stable snapshot: a thread's key, a project's draft, or nothing. */
-function selectionSnapshot(): string | undefined {
-  if (explorerSelected()) return EXPLORER_KEY;
-  const draft = selectedDraft();
-  if (draft !== undefined) return `${DRAFT_PREFIX}${scopedKey(draft.environmentId, draft.projectId)}`;
-  const thread = selectedThread();
-  return thread && scopedKey(thread.environmentId, thread.threadId);
-}
-
-const DRAFT_PREFIX = "draft:";
-const EXPLORER_KEY = "explorer";
-
 /** The thread store for `useSyncExternalStore`, at module level so a render does not re-subscribe. */
 const subscribeToThreads = (listener: () => void) => threadStore.subscribe(listener);
 const threadsSnapshot = () => threadStore.get();
-
-/** Upstream's settled tail: this many settled threads at first, then a page more per click. */
-const SETTLED_TAIL_INITIAL_COUNT = 10;
-const SETTLED_TAIL_PAGE_COUNT = 25;
 
 /** What a thread is doing, as its status reads: Working, Waiting on background work, or neither. */
 type Activity = "working" | "waiting" | null;
@@ -102,13 +86,15 @@ function subagentsByRoot(threads: ReadonlyArray<ShellThread>, activities: Map<st
  * subagent has no card, so while one is selected its root's card is the
  * expanded one. The Explorer shelf comes first (`ExplorerShelf.tsx`), and
  * Ready's first cards are the projects' drafts of new threads that hold
- * something (`drafts.ts`), newest first, and the selected draft.
+ * something (`drafts.ts`), newest first, and the selected draft. Cmd+1 to
+ * Cmd+9 jump to its rows in this order (`order.ts`, `jump.ts`).
  */
 export function PanelView() {
   const state = useSyncExternalStore(subscribeToThreads, threadsSnapshot);
   const selection = useSyncExternalStore(onDidSelectThread, selectionSnapshot);
   const now = useMinuteClock();
-  const draft = selection?.startsWith(DRAFT_PREFIX) ? selectedDraft() : undefined;
+  // Read on the selection's change, which re-renders the panel.
+  const draft = selectedDraft();
   const drafts = useSyncExternalStore(projectDrafts.subscribe, projectDrafts.get);
   const listed = state.threads.filter((thread) => thread.shelf === "pinned" || thread.shelf === "active");
   const working = state.threads.filter((thread) => thread.shelf === "working");
@@ -126,16 +112,11 @@ export function PanelView() {
       ? scopedKey(selectedThread.environmentId, selectedThread.rootId)
       : selection;
   // The drafts with something in them, and the selected one even while it is empty, first.
-  const isSelectedDraft = (candidate: ProjectDraft) =>
-    candidate.environmentId === draft?.environmentId && candidate.projectId === draft.projectId;
-  const heldDrafts = drafts.filter((candidate) => environments.has(candidate.environmentId));
-  const draftCards: ReadonlyArray<ProjectDraft> =
-    draft !== undefined && environments.has(draft.environmentId) && !heldDrafts.some(isSelectedDraft)
-      ? [{ environmentId: draft.environmentId, projectId: draft.projectId, preview: "", createdAt: "" }, ...heldDrafts]
-      : heldDrafts;
+  const isSelectedDraft = (candidate: ProjectDraft) => draftKey(candidate) === selection;
+  const draftCards = draftCardsOf(drafts, draft, new Set(environments.keys()));
   const draftCard = (candidate: ProjectDraft) => (
     <DraftCard
-      key={`${DRAFT_PREFIX}${scopedKey(candidate.environmentId, candidate.projectId)}`}
+      key={draftKey(candidate)}
       environmentId={candidate.environmentId}
       projectId={candidate.projectId}
       environment={chip(candidate.environmentId)}
@@ -160,7 +141,7 @@ export function PanelView() {
   return (
     <div className="pult-panel">
       <ul className="pult-panel-cards">
-        <ExplorerShelf selected={selection === EXPLORER_KEY} environments={state.environments} />
+        <ExplorerShelf environments={state.environments} />
         {state.environments.length === 0 ? (
           <li className="pult-panel-empty">
             <p>Not connected.</p>
@@ -241,7 +222,7 @@ function Shelf({
   selectedLead?: React.ReactNode;
   children: React.ReactNode;
 }) {
-  const [expanded, setExpanded] = useExpanded(`pult-shell.panel.${name}-expanded`, initiallyExpanded);
+  const [expanded, setExpanded] = useExpanded(EXPANDED_KEYS[name], initiallyExpanded);
   const selected = expanded ? undefined : threads.find((thread) => keyOf(thread) === selection);
   return (
     <li className={`pult-shelf pult-shelf-${name}`}>
@@ -280,11 +261,13 @@ function SettledTail({
   const [count, setCount] = useState(SETTLED_TAIL_INITIAL_COUNT);
   useEffect(() => {
     showSettledThreads(count);
-    return () => showSettledThreads(0);
+    showingSettled(count);
+    return () => {
+      showSettledThreads(0);
+      showingSettled(SETTLED_TAIL_INITIAL_COUNT);
+    };
   }, [count]);
-  const visible = threads.slice(0, count);
-  const beyond = threads.slice(count).find((thread) => keyOf(thread) === selection);
-  if (beyond !== undefined) visible.push(beyond);
+  const visible = settledTail(threads, count, selection);
   const hidden = Math.max(threads.length, shelf.count) - visible.length;
   return (
     <>
@@ -365,6 +348,7 @@ function ThreadCard({
           </StatusSlot>
         </span>
         <span className="pult-card-title">{thread.title}</span>
+        <JumpHint rowKey={keyOf(thread)} />
       </div>
       {selected && subagents.length > 0 ? (
         <div className="pult-card-details">

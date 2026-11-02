@@ -3,19 +3,16 @@ import type { URI } from "@codingame/monaco-vscode-api/vscode/vs/base/common/uri
 import { useSyncExternalStore } from "react";
 
 import { toHostPath } from "../files/paths.ts";
-import { openExplorerFiles } from "../threads/selection.ts";
+import { explorerSelected, onDidSelectThread, openExplorerFiles } from "../threads/selection.ts";
 import type { ShellEnvironment } from "../threads/store.ts";
 import { CollapsibleHeader, useExpanded } from "./collapsible.tsx";
 import { exploredEnvironment } from "./explorer.ts";
+import { EXPANDED_KEYS, explorerHighlight } from "./jump.ts";
+import { JumpHint } from "./JumpHint.tsx";
+import { explorerEntries, shown } from "./order.ts";
 
 function run(command: string, ...args: unknown[]): void {
   void getService(ICommandService).then((commands) => commands.executeCommand(command, ...args));
-}
-
-/** A row of the shelf: an environment, or an open file. */
-interface Entry {
-  readonly key: string;
-  readonly node: React.ReactNode;
 }
 
 /**
@@ -24,60 +21,50 @@ interface Entry {
  * per held environment, selecting the workspace with the Explorer tab at
  * its folder above its projects (`pult-shell.exploreEnvironment`), its open files under it,
  * each selecting the workspace at its tab; files of no held environment
- * last. While the workspace is `selected`, its active file's row is
+ * last (`explorerEntries`). While the workspace is selected, its active file's row is
  * highlighted, or with none listed the environment's explored last;
- * collapsed, the shelf still shows that row.
+ * collapsed, the shelf still shows that row. The files' rows are among the jumps (`jump.ts`).
  */
-export function ExplorerShelf({ selected, environments }: { selected: boolean; environments: ReadonlyArray<ShellEnvironment> }) {
-  const { files, active } = useSyncExternalStore(openExplorerFiles.subscribe, openExplorerFiles.get);
-  const explored = useSyncExternalStore(exploredEnvironment.subscribe, exploredEnvironment.get);
-  const [expanded, setExpanded] = useExpanded("pult-shell.panel.explorer-expanded", true);
+export function ExplorerShelf({ environments }: { environments: ReadonlyArray<ShellEnvironment> }) {
+  const { files } = useSyncExternalStore(openExplorerFiles.subscribe, openExplorerFiles.get);
+  useSyncExternalStore(exploredEnvironment.subscribe, exploredEnvironment.get);
+  useSyncExternalStore(onDidSelectThread, explorerSelected);
+  const [expanded, setExpanded] = useExpanded(EXPANDED_KEYS.explorer, true);
   if (environments.length === 0 && files.length === 0) return null;
-  const activeFile = selected && active !== undefined ? files.find((file) => file.toString() === active.toString()) : undefined;
-  const highlighted = activeFile?.toString() ?? (selected && explored !== undefined ? environmentKey(explored) : undefined);
-  const ofEnvironment = (file: URI, environment: ShellEnvironment) =>
-    file.scheme === "pult" && file.authority.toLowerCase() === environment.id.toLowerCase();
-  const fileEntry = (file: URI, nested: boolean): Entry => ({
-    key: file.toString(),
-    node: (
-      <EntryButton
-        icon="file"
-        label={baseName(file)}
-        detail={folderName(file)}
-        title={file.scheme === "pult" ? toHostPath(file.path) : file.toString(true)}
-        nested={nested}
-        selected={file.toString() === highlighted}
-        onClick={() => run("pult-shell.selectExplorer", file.toString())}
-      />
-    ),
-  });
-  const entries: Entry[] = [
-    ...environments.flatMap((environment) => [
-      {
-        key: environmentKey(environment.id),
-        node: (
-          <EntryButton
-            icon="root-folder"
-            label={environment.name}
-            title={`Explore ${environment.name}'s projects`}
-            nested={false}
-            selected={environmentKey(environment.id) === highlighted}
-            onClick={() => run("pult-shell.exploreEnvironment", environment.id)}
-          />
-        ),
-      },
-      ...files.filter((file) => ofEnvironment(file, environment)).map((file) => fileEntry(file, true)),
-    ]),
-    ...files.filter((file) => !environments.some((environment) => ofEnvironment(file, environment))).map((file) => fileEntry(file, false)),
-  ];
-  const shown = expanded ? entries : entries.filter((entry) => entry.key === highlighted);
+  // Read on a change of the selection, the files or the environment explored, each of which re-renders the shelf.
+  const highlighted = explorerHighlight();
+  const names = new Map(environments.map((environment) => [environment.id, environment.name]));
+  const entries = explorerEntries(environments.map((environment) => environment.id), files);
+  const shownEntries = shown(entries, expanded, (entry) => entry.key === highlighted);
   return (
     <li className="pult-shelf pult-shelf-explorer">
       <CollapsibleHeader label="Explorer" expanded={expanded} onToggle={() => setExpanded(!expanded)} />
-      {shown.length > 0 ? (
+      {shownEntries.length > 0 ? (
         <ul className="pult-explorer-entries">
-          {shown.map((entry) => (
-            <li key={entry.key}>{entry.node}</li>
+          {shownEntries.map((entry) => (
+            <li key={entry.key}>
+              {entry.kind === "environment" ? (
+                <EntryButton
+                  icon="root-folder"
+                  label={names.get(entry.environmentId) ?? entry.environmentId}
+                  title={`Explore ${names.get(entry.environmentId) ?? entry.environmentId}'s projects`}
+                  nested={false}
+                  selected={entry.key === highlighted}
+                  onClick={() => run("pult-shell.exploreEnvironment", entry.environmentId)}
+                />
+              ) : (
+                <EntryButton
+                  icon="file"
+                  label={baseName(entry.file)}
+                  detail={folderName(entry.file)}
+                  title={entry.file.scheme === "pult" ? toHostPath(entry.file.path) : entry.file.toString(true)}
+                  nested={entry.nested}
+                  selected={entry.key === highlighted}
+                  jumpKey={entry.key}
+                  onClick={() => run("pult-shell.selectExplorer", entry.key)}
+                />
+              )}
+            </li>
           ))}
         </ul>
       ) : null}
@@ -92,6 +79,7 @@ function EntryButton({
   title,
   nested,
   selected,
+  jumpKey,
   onClick,
 }: {
   icon: string;
@@ -100,6 +88,8 @@ function EntryButton({
   title: string;
   nested: boolean;
   selected: boolean;
+  /** The row's key among the jumps, for a row they reach. */
+  jumpKey?: string;
   onClick: () => void;
 }) {
   return (
@@ -113,11 +103,10 @@ function EntryButton({
       <i className={`codicon codicon-${icon}`} aria-hidden />
       <span className="pult-explorer-entry-name">{label}</span>
       {detail !== undefined ? <span className="pult-explorer-entry-detail">{detail}</span> : null}
+      {jumpKey !== undefined ? <JumpHint rowKey={jumpKey} /> : null}
     </button>
   );
 }
-
-const environmentKey = (environmentId: string) => `environment:${environmentId}`;
 
 function baseName(file: URI): string {
   return file.path.slice(file.path.lastIndexOf("/") + 1) || file.path;

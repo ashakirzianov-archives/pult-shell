@@ -64,6 +64,7 @@
 
 /* The card's selecting part: project, status and title, the whole card's width. */
 .pult-card-select {
+  position: relative;
   display: block;
   width: 100%;
   padding: 8px 10px;
@@ -535,6 +536,7 @@
 }
 
 .pult-explorer-entry {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -756,4 +758,33 @@
 
 .monaco-workbench:not(.nosidebar) > .pult-panel-expand {
   display: none;
+}
+
+/* A row's jump shortcut while the jump modifier is held (`JumpHint.tsx`), upstream's badge: over the row's right end, vertically centred. */
+.pult-jump-hint {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 6px;
+  transform: translateY(-50%);
+  border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+  border-radius: 10px;
+  background: var(--vscode-editorWidget-background);
+  color: var(--vscode-foreground);
+  box-shadow: 0 1px 2px var(--vscode-widget-shadow);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 10px;
+  font-weight: 500;
+  pointer-events: none;
+}
+
+/* On a card, over its status, in the top row. */
+.pult-card-select > .pult-jump-hint {
+  top: 6px;
+  right: 8px;
+  transform: none;
 }

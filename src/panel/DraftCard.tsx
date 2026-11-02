@@ -2,6 +2,8 @@ import { getService, ICommandService } from "@codingame/monaco-vscode-api";
 
 import { projectIconUri, useProjectIcons } from "../threads/projectIcon.ts";
 import { threadStore } from "../threads/store.ts";
+import { JumpHint } from "./JumpHint.tsx";
+import { draftKey } from "./order.ts";
 
 /**
  * A project's draft of a new thread, Ready's first cards: a thread card's
@@ -45,6 +47,7 @@ export function DraftCard({
           </span>
         </span>
         <span className="pult-card-title">{preview.length > 0 ? preview : "New thread"}</span>
+        <JumpHint rowKey={draftKey({ environmentId, projectId })} />
       </button>
     </li>
   );
