@@ -17,7 +17,7 @@ import {
 } from "../threads/store.ts";
 import { CollapsibleHeader, useExpanded } from "./collapsible.tsx";
 import { DraftCard, EnvironmentChip } from "./DraftCard.tsx";
-import { type ProjectDraft, projectDrafts } from "./drafts.ts";
+import { type ProjectDraft, projectDrafts, threadsWithUnsentMessages } from "./drafts.ts";
 import { ExplorerShelf } from "./ExplorerShelf.tsx";
 import { EXPANDED_KEYS, selectionSnapshot, showingSettled } from "./jump.ts";
 import { JumpHint } from "./JumpHint.tsx";
@@ -288,7 +288,7 @@ function SettledTail({
 /**
  * T3 Code's thread card without its bottom row: project icon and name, its
  * `environment`'s label beside them while there are several (`EnvironmentChip`),
- * pin and status, then the title, as the button that selects the thread; on
+ * pin, a dot while its composer holds an unsent message, and status, then the title, as the button that selects the thread; on
  * hover or keyboard focus the status gives way to the thread's actions
  * (`StatusSlot`), and a right-click opens its menu (`showThreadMenu`).
  * Selected, it expands with its subagents under their header, each selecting
@@ -315,6 +315,7 @@ function ThreadCard({
   now: number;
 }) {
   const select = () => run("pult-shell.selectThread", thread.environmentId, thread.id);
+  const unsent = useSyncExternalStore(threadsWithUnsentMessages.subscribe, threadsWithUnsentMessages.get).has(keyOf(thread));
   useProjectIcons();
   return (
     <li className={`pult-card${selected ? " pult-card-selected" : ""}${thread.shelf === "settled" ? " pult-card-settled" : ""}`}>
@@ -340,6 +341,7 @@ function ThreadCard({
           <span className="pult-card-project">{thread.projectName}</span>
           <EnvironmentChip label={environment} />
           {thread.pinned ? <i className="codicon codicon-pinned pult-card-pin" title="Pinned" aria-label="Pinned" /> : null}
+          {unsent ? <span className="pult-card-unsent" title="Unsent message" aria-label="Unsent message" /> : null}
           <StatusSlot thread={thread} features={features}>
             <Status thread={thread} activity={activities.get(keyOf(thread)) ?? null} now={now} />
           </StatusSlot>

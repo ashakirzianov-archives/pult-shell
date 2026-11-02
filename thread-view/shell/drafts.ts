@@ -1,7 +1,8 @@
-// The projects' drafts the shell remembers, for the left panel's cards: the
-// composer store's, which the panel reaches through this module alone, so it
-// need not load the whole view.
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+// The projects' drafts the shell remembers, and the threads whose composer
+// holds an unsent message, for the left panel's cards: the composer store's,
+// which the panel reaches through this module alone, so it need not load the
+// whole view.
+import { parseScopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { replaceComposerContextReferences } from "@t3tools/shared/composerContextReferences";
 
@@ -66,16 +67,47 @@ function preview(composer: ComposerDraft): string {
   return `${attachments} attachment${attachments === 1 ? "" : "s"}`;
 }
 
-let drafts: ReadonlyArray<ProjectDraft> = readDrafts();
-const listeners = new Set<() => void>();
+/** The threads whose composer holds something the user wrote or attached, keyed `<environmentId>/<threadId>` as the shell's store keys them. */
+function readUnsentThreads(): ReadonlyArray<string> {
+  const { draftsByThreadKey } = useComposerDraftStore.getState();
+  const keys: string[] = [];
+  for (const [key, composer] of Object.entries(draftsByThreadKey)) {
+    // A thread's composer is under its scoped key, `<environmentId>:<threadId>`; a draft's under its draft id, which parses as none or, a queued run's edit, as no thread a card shows.
+    const thread = parseScopedThreadKey(key);
+    if (thread !== null && composerDraftHasUserContent(composer)) keys.push(`${thread.environmentId}/${thread.threadId}`);
+  }
+  return keys.toSorted();
+}
 
-// One subscription for every card: the list is read again on each change of the store, and told only when it differs.
+let drafts: ReadonlyArray<ProjectDraft> = readDrafts();
+let unsentThreads: ReadonlySet<string> = new Set(readUnsentThreads());
+const listeners = new Set<() => void>();
+const unsentListeners = new Set<() => void>();
+
+// One subscription for every card: the lists are read again on each change of the store, and told only when they differ.
 useComposerDraftStore.subscribe(() => {
   const next = readDrafts();
-  if (JSON.stringify(next) === JSON.stringify(drafts)) return;
-  drafts = next;
-  for (const listener of listeners) listener();
+  if (JSON.stringify(next) !== JSON.stringify(drafts)) {
+    drafts = next;
+    for (const listener of listeners) listener();
+  }
+  const unsent = readUnsentThreads();
+  if (unsent.length !== unsentThreads.size || unsent.some((key) => !unsentThreads.has(key))) {
+    unsentThreads = new Set(unsent);
+    for (const listener of unsentListeners) listener();
+  }
 });
+
+/** The threads with an unsent message for `useSyncExternalStore`: the same set until one is added or gone. */
+export const threadsWithUnsentMessages = {
+  get: () => unsentThreads,
+  subscribe(listener: () => void): () => void {
+    unsentListeners.add(listener);
+    return () => {
+      unsentListeners.delete(listener);
+    };
+  },
+};
 
 /** The drafts for `useSyncExternalStore`: the same array until a card would change. */
 export const projectDrafts = {
