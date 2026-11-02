@@ -230,6 +230,7 @@ export function shellThreads(
       projectId: thread.projectId,
       projectName: project?.title ?? thread.projectId,
       projectRoot: project?.workspaceRoot ?? null,
+      checkoutRoot: thread.worktreePath ?? project?.workspaceRoot ?? null,
       projectIcon: project?.projectIcon ?? null,
       projectFaviconPath: project?.faviconPath ?? null,
       title: thread.title,

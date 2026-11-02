@@ -18,6 +18,8 @@ export interface ShellThread {
   readonly projectName: string;
   /** The project's root on the environment host, for `pult:` URIs. */
   readonly projectRoot: string | null;
+  /** Where the thread works on the environment host: its worktree, else its project's root (`checkouts.ts` in `src/changes/`). */
+  readonly checkoutRoot: string | null;
   /** The project's chosen icon; null for its favicon or the one upstream derives from its name. */
   readonly projectIcon: ProjectIconOverride | null;
   /** The project's chosen favicon file, relative to its root; null for the one the server finds. */
