@@ -4,7 +4,7 @@ import { createPortal } from "react-dom";
 
 import { connection } from "../connection/index.ts";
 import { BarTip } from "../threads/barEntries.tsx";
-import { type PaneTarget, ThreadContent } from "../threads/pane.tsx";
+import { draftCreates, type PaneTarget, ThreadContent } from "../threads/pane.tsx";
 import { threadStore } from "../threads/store.ts";
 import { starById, starStore, type StarTarget, starTarget } from "./model.ts";
 import { earlierConversations } from "./stars.ts";
@@ -39,8 +39,12 @@ export function StarContent({ starId }: { starId: string }) {
     generation: 0,
   });
   if (target !== undefined && !sameTarget(target, mount.current.target)) {
-    const { promoted, generation } = mount.current;
-    const adopted = target.kind === "thread" && promoted?.environmentId === target.environmentId && promoted.threadId === target.threadId;
+    const { promoted, generation, target: shown } = mount.current;
+    // The store may bring the thread before the view names it, or after.
+    const adopted =
+      target.kind === "thread" &&
+      ((promoted?.environmentId === target.environmentId && promoted.threadId === target.threadId) ||
+        (shown?.kind === "draft" && draftCreates(shown, target.environmentId, target.threadId)));
     mount.current = { target, generation: adopted ? generation : generation + 1 };
   }
   if (star === undefined) return <div className="pult-thread-empty">Reading your Star…</div>;

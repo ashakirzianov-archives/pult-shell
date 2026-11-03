@@ -36,6 +36,8 @@ const DRAFT_TYPE_ID = "pult.shell.draft";
 const STAR_TYPE_ID = "pult.shell.star";
 
 let started: Promise<ThreadViewMounts> | undefined;
+/** The view once it has started, for what the page asks of it synchronously. */
+let loaded: ThreadViewMounts | undefined;
 
 /** What a pane shows, in its environment: a thread, or a project's draft of a new thread. */
 export type PaneTarget =
@@ -73,7 +75,7 @@ function run(command: string, ...args: unknown[]): void {
 export function threadView() {
   started ??= (async () => {
     const [view, scheme] = await Promise.all([import("../../thread-view/shell/main.tsx"), workbenchColorScheme()]);
-    return view.startThreadView({
+    loaded = view.startThreadView({
       connection: () => connection.context(),
       openThread: (environmentId, threadId) => run("pult-shell.selectThread", environmentId, threadId),
       // A draft the view went to, which it remembered as the project's.
@@ -87,11 +89,21 @@ export function threadView() {
       colorScheme: scheme.current,
       onDidChangeColorScheme: scheme.onDidChange,
     });
+    return loaded;
   })().catch((error: unknown) => {
     started = undefined;
     throw error;
   });
   return started;
+}
+
+/**
+ * Whether the thread is the one the project's draft creates, as the view
+ * knows it before it names the thread to the draft's `onPromoted`; false
+ * while no view has started, when no draft is mounted either.
+ */
+export function draftCreates(draft: { readonly environmentId: string; readonly projectId: string }, environmentId: string, threadId: string): boolean {
+  return loaded?.draftCreates(draft.environmentId, draft.projectId, environmentId, threadId) ?? false;
 }
 
 /**

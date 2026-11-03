@@ -16,6 +16,7 @@ import {
 import { setThreadViewHost, type ThreadViewHost } from "./host.ts";
 import { routeRightPanel } from "./rightPanel.ts";
 import {
+  isPromotion,
   type MountedView,
   type MountOptions,
   mountComposerView,
@@ -45,6 +46,12 @@ export interface ThreadViewMounts {
   ): MountedView;
   /** The composer alone of a thread or a project's draft, for the strip under a file. */
   mountComposer(element: HTMLElement, target: ViewTarget): MountedView;
+  /**
+   * Whether the server thread `threadId` on `environmentId` is the one the
+   * project's draft on `draftEnvironmentId` creates, before the view mounted
+   * for that draft has been promoted to it (`mountDraft`'s `onPromoted`).
+   */
+  draftCreates(draftEnvironmentId: string, projectId: string, environmentId: string, threadId: string): boolean;
 }
 
 /**
@@ -64,5 +71,11 @@ export function startThreadView(host: ThreadViewHost): ThreadViewMounts {
   if (readAppearanceModePreference("system") !== "system") setAppearanceMode("system");
   // Upstream applies its theme as its module loads, which is before this, by the browser's scheme.
   refreshTheme();
-  return { mount: mountThreadView, mountDraft: mountDraftView, mountComposer: mountComposerView };
+  return {
+    mount: mountThreadView,
+    mountDraft: mountDraftView,
+    mountComposer: mountComposerView,
+    draftCreates: (draftEnvironmentId, projectId, environmentId, threadId) =>
+      isPromotion({ kind: "draft", environmentId: draftEnvironmentId, projectId }, environmentId, threadId),
+  };
 }

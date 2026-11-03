@@ -38,7 +38,7 @@ type ViewTarget =
   | { readonly kind: "draft"; readonly environmentId: string; readonly projectId: string };
 
 /** Whether the server thread the view went to is the one the project's draft created, on the draft's environment or another. */
-function isPromotion(draft: Extract<ViewTarget, { kind: "draft" }>, environmentId: string, threadId: string): boolean {
+export function isPromotion(draft: Extract<ViewTarget, { kind: "draft" }>, environmentId: string, threadId: string): boolean {
   const draftId = localStorage.getItem(draftKey(draft.environmentId, draft.projectId)) as DraftId | null;
   if (draftId === null) return false;
   const store = useComposerDraftStore.getState();
