@@ -1,4 +1,5 @@
 import { getService, IConfigurationService, IContextKeyService } from "@codingame/monaco-vscode-api";
+import { ConfigurationTarget } from "@codingame/monaco-vscode-api/vscode/vs/platform/configuration/common/configuration";
 import { Action2, registerAction2 } from "@codingame/monaco-vscode-api/vscode/vs/platform/actions/common/actions";
 import {
   ConfigurationScope,
@@ -29,10 +30,14 @@ export type Mode = (typeof MODES)[number]["mode"];
  * What the mode flips, each thing hidden by default and shown in VS Code
  * mode: the context key `pult.vscodeMode`, for `when` clauses, and the class
  * `pult-mode-vscode` on the workbench's element, for the default-mode rules
- * in `style.css` (the "More Actions" of the editor tabs' row).
+ * in `style.css` (the "More Actions" of the editor tabs' row); and the tab
+ * bar held on Multiple in the in-memory configuration layer, since a thread's
+ * tab is its header, the user's own Single or None applying in VS Code mode
+ * alone, where the ways to them show (`src/tabBar.ts`).
  */
-const VSCodeModeContext = new RawContextKey<boolean>("pult.vscodeMode", false);
+export const VSCodeModeContext = new RawContextKey<boolean>("pult.vscodeMode", false);
 const VSCODE_MODE_CLASS = "pult-mode-vscode";
+const SHOW_TABS = "workbench.editor.showTabs";
 
 /** Registers the setting and the palette's switches. Called before the workbench starts. */
 export function registerMode(): void {
@@ -95,12 +100,17 @@ export async function setMode(mode: Mode): Promise<void> {
 
 /** Applies the mode to the context key and the workbench's class, now and on each change. Called once the workbench is up. */
 export async function startMode(): Promise<void> {
-  const [choice, contextKeys] = await Promise.all([modeChoice(), getService(IContextKeyService)]);
+  const [choice, contextKeys, configuration] = await Promise.all([
+    modeChoice(),
+    getService(IContextKeyService),
+    getService(IConfigurationService),
+  ]);
   const key = VSCodeModeContext.bindTo(contextKeys);
   const apply = () => {
     const vscode = choice.current() === "vscode";
     key.set(vscode);
     document.querySelector(".monaco-workbench")?.classList.toggle(VSCODE_MODE_CLASS, vscode);
+    void configuration.updateValue(SHOW_TABS, vscode ? undefined : "multiple", ConfigurationTarget.MEMORY);
   };
   apply();
   choice.onDidChange(apply);
