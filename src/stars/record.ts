@@ -94,16 +94,23 @@ function unquote(raw: string): string {
 }
 
 /** A value as the page writes it: a JSON string, which is YAML's double-quoted one. */
-const quoted = (value: string) => JSON.stringify(value);
+export const quoted = (value: string) => JSON.stringify(value);
 
-/** The Star's record in `AGENTS.md`'s front matter; undefined for a file that is no Star's. */
-export function parseRecord(text: string): StarRecord | undefined {
+/** A file's front matter, by key, and its body; undefined for a file without one. A Star's transcripts are read with it too (`transcript.ts`). */
+export function readFrontMatter(text: string): { readonly fields: ReadonlyMap<string, string>; readonly body: string } | undefined {
   const matter = frontMatter(text);
   if (matter === undefined) return undefined;
   const fields = new Map(matter.lines.flatMap((line) => {
     const parsed = entry(line);
     return parsed === undefined ? [] : [[parsed.key, parsed.value] as const];
   }));
+  return { fields, body: text.slice(matter.bodyStart) };
+}
+
+/** The Star's record in `AGENTS.md`'s front matter; undefined for a file that is no Star's. */
+export function parseRecord(text: string): StarRecord | undefined {
+  const fields = readFrontMatter(text)?.fields;
+  if (fields === undefined) return undefined;
   const id = fields.get("id");
   if (fields.get("xaxis-kind") !== KIND || id === undefined || id === "") return undefined;
   return { id, name: fields.get("name") ?? "", tint: fields.get("tint") || DEFAULT_TINT, created: fields.get("created") ?? "" };
