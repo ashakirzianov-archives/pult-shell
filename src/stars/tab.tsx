@@ -1,5 +1,5 @@
 import { getService, ICommandService } from "@codingame/monaco-vscode-api";
-import { useRef, useState, useSyncExternalStore } from "react";
+import { lazy, Suspense, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 
 import { connection } from "../connection/index.ts";
@@ -7,8 +7,11 @@ import { BarTip } from "../threads/barEntries.tsx";
 import { draftCreates, type PaneTarget, ThreadContent } from "../threads/pane.tsx";
 import { threadStore } from "../threads/store.ts";
 import { starById, starStore, type StarTarget, starTarget } from "./model.ts";
-import { earlierConversations, starName } from "./stars.ts";
+import { starName } from "./stars.ts";
 import "./stars.css";
+
+// With the view, whose markdown its transcripts render with.
+const StarFold = lazy(() => import("./fold.tsx"));
 
 const subscribeToConnection = (listener: () => void) => connection.onDidChange(listener);
 const environmentsSnapshot = () => connection.environments;
@@ -36,7 +39,8 @@ export function starComposerOptions(starId: string) {
 
 /**
  * The Star's tab: one scroller, the fold of its earlier conversations at the
- * top of the timeline, then its current conversation's view, mounted as the
+ * top of the timeline (`fold.tsx`, rendered by the view into the element its
+ * timeline places there), then its current conversation's view, mounted as the
  * thread pane mounts a thread on its environment, or while the Star sleeps
  * its project's draft (`new-thread-draft`'s), in the home it wakes in
  * (`starTarget`). Writing to the draft wakes the Star: the view stays
@@ -51,8 +55,17 @@ export function StarContent({ starId }: { starId: string }) {
   // Where a sleeping Star wakes depends on which environments the page holds.
   useSyncExternalStore(subscribeToConnection, environmentsSnapshot);
   const target = star === undefined ? undefined : starTarget(star);
-  const [header] = useState(() => document.createElement("div"));
-  const [options] = useState(() => ({ ...starComposerOptions(starId), timelineHeader: header }));
+  const [options] = useState(() => ({
+    ...starComposerOptions(starId),
+    timelineHeader: {
+      element: document.createElement("div"),
+      content: (
+        <Suspense fallback={null}>
+          <StarFold starId={starId} />
+        </Suspense>
+      ),
+    },
+  }));
   // The view's mount: a new generation for a new target, but for the thread the draft became, which the view shows already.
   const mount = useRef<{ target: StarTarget | undefined; generation: number; promoted?: { environmentId: string; threadId: string } }>({
     target: undefined,
@@ -73,39 +86,15 @@ export function StarContent({ starId }: { starId: string }) {
   }
   const paneTarget: PaneTarget = target;
   return (
-    <>
-      <ThreadContent
-        target={paneTarget}
-        generation={mount.current.generation}
-        onPromoted={(environmentId, threadId) => {
-          mount.current.promoted = { environmentId, threadId };
-        }}
-        options={options}
-        barEntries={(bar) => <StarBarEntries bar={bar} target={target} />}
-      />
-      {createPortal(<EarlierConversations count={earlierConversations(star)} />, header)}
-    </>
-  );
-}
-
-/**
- * The fold of the Star's earlier conversations, at the top of its
- * timeline: collapsed, "Earlier conversations · N", the transcripts of the
- * environment its conversation runs on, or ran on last; nothing at 0. Its
- * content, the transcripts rendered above the live view, is
- * `pult/issues/star-sleep`'s.
- */
-function EarlierConversations({ count }: { count: number }) {
-  if (count === 0) return null;
-  return (
-    <div className="pult-star-fold" aria-expanded={false}>
-      <span className="pult-star-fold-rule" aria-hidden />
-      <span className="pult-star-fold-label">
-        <i className="codicon codicon-chevron-right" aria-hidden />
-        Earlier conversations · {count}
-      </span>
-      <span className="pult-star-fold-rule" aria-hidden />
-    </div>
+    <ThreadContent
+      target={paneTarget}
+      generation={mount.current.generation}
+      onPromoted={(environmentId, threadId) => {
+        mount.current.promoted = { environmentId, threadId };
+      }}
+      options={options}
+      barEntries={(bar) => <StarBarEntries bar={bar} target={target} />}
+    />
   );
 }
 
