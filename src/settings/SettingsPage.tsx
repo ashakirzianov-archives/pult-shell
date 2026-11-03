@@ -4,6 +4,7 @@ import { IContextMenuService } from "@codingame/monaco-vscode-api/vscode/vs/plat
 import { useRef, useSyncExternalStore } from "react";
 
 import { connection, environmentName, type ShellEnvironment } from "../connection/index.ts";
+import { setUsageLimitsMode, USAGE_LIMITS_MODES, usageLimitsMode } from "../limits/index.ts";
 import { type modeChoice, MODES, setMode } from "../mode.ts";
 import { COLOR_SCHEMES, type colorSchemeChoice, setColorScheme } from "./colorScheme.ts";
 
@@ -22,6 +23,7 @@ export function SettingsPage({ colorScheme, mode }: { colorScheme: ColorSchemeCh
       <h1 className="pult-settings-title">Settings</h1>
       <EnvironmentsSection />
       <AppearanceSection colorScheme={colorScheme} />
+      <PanelSection />
       <ModeSection mode={mode} />
       <VSCodeSection />
     </div>
@@ -125,6 +127,42 @@ function AppearanceSection({ colorScheme }: { colorScheme: ColorSchemeChoice }) 
               className="pult-settings-segment"
               aria-pressed={scheme === current}
               onClick={() => void setColorScheme(scheme)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * The left panel's shelves: when the Limits shelf shows the usage limits,
+ * When warning, Always or Hidden (`pult.panel.usageLimits`, `src/limits/`),
+ * one button each, the current one pressed; the palette's Pult: Usage Limits
+ * Shelf… and the shelf header's right-click are the same setting.
+ */
+function PanelSection() {
+  const usageLimits = useSyncExternalStore(usageLimitsMode.subscribe, usageLimitsMode.get);
+  return (
+    <section className="pult-settings-section">
+      <h2>Panel</h2>
+      <div className="pult-settings-row">
+        <div className="pult-settings-row-text">
+          <div className="pult-settings-row-label">Usage limits</div>
+          <div className="pult-settings-row-description">
+            The providers' usage limits in the Limits shelf: by default only those past 95% or on a pace that runs out before the reset.
+          </div>
+        </div>
+        <div className="pult-settings-segments" role="group" aria-label="Usage limits">
+          {USAGE_LIMITS_MODES.map(({ mode: choice, label }) => (
+            <button
+              key={choice}
+              type="button"
+              className="pult-settings-segment"
+              aria-pressed={choice === usageLimits}
+              onClick={() => void setUsageLimitsMode(choice)}
             >
               {label}
             </button>
