@@ -57,7 +57,7 @@ export function starName(star: Pick<Star<StarThread>, "name">): string {
 const trimSlash = (path: string) => (path.length > 1 && /[/\\]$/.test(path) ? path.slice(0, -1) : path);
 
 /** The project of `environmentId` rooted at `root`, if there is one. */
-function projectAt(projects: ReadonlyArray<Pick<ShellProject, "environmentId" | "id" | "root">>, environmentId: string, root: string) {
+export function projectAt(projects: ReadonlyArray<Pick<ShellProject, "environmentId" | "id" | "root">>, environmentId: string, root: string) {
   return projects.find((project) => project.environmentId === environmentId && project.root !== null && trimSlash(project.root) === trimSlash(root));
 }
 
@@ -162,7 +162,7 @@ export interface EnvironmentReading {
   readonly phase: string;
   /** Whether the thread model has its projects. */
   readonly loaded: boolean;
-  /** Whether its Stars' folder was read, is being read, or could not be. */
+  /** Whether its Stars' folder was read, every folder in it, is being read, or could not be, wholly or in part. */
   readonly read: "pending" | "read" | "failed";
   /** Whether the page tried to create a Star on it since it last connected. */
   readonly attempted: boolean;
@@ -170,25 +170,29 @@ export interface EnvironmentReading {
 
 /**
  * The environment the page creates a Star on by default, if any: only while
- * Show Star is on, the page holds no Star on any environment, and every
+ * Show Star is on, the page holds no Star on any environment, every
  * environment has answered or failed, so a Star is never made beside one
- * still loading; then the first ready environment in the page's order whose
- * folder was read, not tried since it last connected.
+ * still loading, no ready environment's folder failed to read, since it may
+ * hold the Star, and no creation failed, was refused or lost a race since
+ * an environment last connected (`halted`); then the first ready
+ * environment in the page's order whose folder was read, not tried since it
+ * last connected.
  */
 export function creationTarget(input: {
   readonly enabled: boolean;
   /** Whether the page is restoring the environments saved before a reload. */
   readonly restoring: boolean;
+  readonly halted: boolean;
   readonly stars: number;
   readonly environments: ReadonlyArray<EnvironmentReading>;
 }): string | undefined {
-  if (!input.enabled || input.restoring || input.stars > 0) return undefined;
-  const loading = input.environments.some(
+  if (!input.enabled || input.restoring || input.halted || input.stars > 0) return undefined;
+  const unsure = input.environments.some(
     (environment) =>
       environment.phase === "connecting" ||
       environment.phase === "reconnecting" ||
-      (environment.phase === "ready" && (environment.read === "pending" || !environment.loaded)),
+      (environment.phase === "ready" && (environment.read !== "read" || !environment.loaded)),
   );
-  if (loading) return undefined;
+  if (unsure) return undefined;
   return input.environments.find((environment) => environment.phase === "ready" && environment.read === "read" && !environment.attempted)?.id;
 }

@@ -88,21 +88,33 @@ describe("foldersToAdopt", () => {
 describe("creationTarget", () => {
   const reading = (id: string, overrides: Partial<EnvironmentReading> = {}): EnvironmentReading => ({ id, phase: "ready", loaded: true, read: "read", attempted: false, ...overrides });
 
+  const decide = (environments: EnvironmentReading[], overrides: Partial<{ enabled: boolean; restoring: boolean; halted: boolean; stars: number }> = {}) =>
+    creationTarget({ enabled: true, restoring: false, halted: false, stars: 0, environments, ...overrides });
+
   test("creates on the first ready environment once every one has answered", () => {
-    assert.equal(creationTarget({ enabled: true, restoring: false, stars: 0, environments: [reading("a", { phase: "offline", read: "failed" }), reading("b"), reading("c")] }), "b");
+    assert.equal(decide([reading("a", { phase: "offline", read: "failed" }), reading("b"), reading("c")]), "b");
+    assert.equal(decide([reading("a", { attempted: true }), reading("b")]), "b");
   });
 
   test("waits while an environment is still connecting, reading or loading its projects, or the page restores", () => {
-    const wait = (environments: EnvironmentReading[], restoring = false) => creationTarget({ enabled: true, restoring, stars: 0, environments });
-    assert.equal(wait([reading("a"), reading("b", { phase: "connecting", read: "pending" })]), undefined);
-    assert.equal(wait([reading("a"), reading("b", { read: "pending" })]), undefined);
-    assert.equal(wait([reading("a"), reading("b", { loaded: false })]), undefined);
-    assert.equal(wait([reading("a")], true), undefined);
+    assert.equal(decide([reading("a"), reading("b", { phase: "connecting", read: "pending" })]), undefined);
+    assert.equal(decide([reading("a"), reading("b", { read: "pending" })]), undefined);
+    assert.equal(decide([reading("a"), reading("b", { loaded: false })]), undefined);
+    assert.equal(decide([reading("a")], { restoring: true }), undefined);
   });
 
-  test("creates nothing while a Star is held, Show Star is off, or every environment was tried or failed", () => {
-    assert.equal(creationTarget({ enabled: true, restoring: false, stars: 1, environments: [reading("a")] }), undefined);
-    assert.equal(creationTarget({ enabled: false, restoring: false, stars: 0, environments: [reading("a")] }), undefined);
-    assert.equal(creationTarget({ enabled: true, restoring: false, stars: 0, environments: [reading("a", { attempted: true }), reading("b", { read: "failed" })] }), undefined);
+  test("creates nothing while a Star is held, Show Star is off, or every environment was tried", () => {
+    assert.equal(decide([reading("a")], { stars: 1 }), undefined);
+    assert.equal(decide([reading("a")], { enabled: false }), undefined);
+    assert.equal(decide([reading("a", { attempted: true })]), undefined);
+  });
+
+  test("creates nothing while a ready environment's folder failed to read, since it may hold the Star", () => {
+    assert.equal(decide([reading("a", { read: "failed" }), reading("b")]), undefined);
+    assert.equal(decide([reading("a"), reading("b", { read: "failed" })]), undefined);
+  });
+
+  test("creates nothing on another environment after a creation failed, was refused or lost a race", () => {
+    assert.equal(decide([reading("a", { attempted: true }), reading("b")], { halted: true }), undefined);
   });
 });
