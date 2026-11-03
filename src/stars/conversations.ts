@@ -3,6 +3,7 @@ import { ORCHESTRATION_V2_WS_METHODS, ThreadId } from "@t3tools/contracts";
 
 import { connection } from "../connection/index.ts";
 import { environmentServer } from "../files/server.ts";
+import { threadsWithUnsentMessages } from "../panel/drafts.ts";
 import { settleQuietly } from "../threads/park.ts";
 import { scopedKey, type ShellThread, threadStore } from "../threads/store.ts";
 import { refreshTranscript } from "./foldState.ts";
@@ -46,7 +47,13 @@ const stampOf = (thread: ShellThread) => JSON.stringify([thread.updatedAt, threa
 const lineageWorks = (thread: ShellThread, threads: ReadonlyArray<ShellThread>) =>
   threads.some((each) => each.environmentId === thread.environmentId && each.rootId === thread.id && each.id !== thread.id && each.working);
 
-const sameInstant =(left: string | undefined, right: string) => left !== undefined && Date.parse(left) === Date.parse(right);
+/** Whether the conversation's composer holds anything the user wrote or attached, by the composer store. */
+async function hasUnsentMessage(thread: Pick<ShellThread, "environmentId" | "id">): Promise<boolean> {
+  const { composerHasContent } = await import("../../thread-view/shell/drafts.ts");
+  return composerHasContent({ kind: "thread", environmentId: thread.environmentId, threadId: thread.id });
+}
+
+const sameInstant = (left: string | undefined, right: string) => left !== undefined && Date.parse(left) === Date.parse(right);
 
 /**
  * The Stars' conversations, kept by the page (xaxis `pult/issues/star-sleep`):
@@ -78,6 +85,8 @@ class StarConversations {
     threadStore.subscribe(() => this.update());
     starStore.subscribe(() => this.update());
     starEnabled.subscribe(() => this.update());
+    // Loads the composer store, without the rest of the view, and looks again as a composer fills or empties.
+    threadsWithUnsentMessages.subscribe(() => this.update());
     this.update();
   }
 
@@ -89,6 +98,7 @@ class StarConversations {
     let next = Number.POSITIVE_INFINITY;
     const open = new Set<string>();
     const threads = threadStore.get().threads;
+    const unsent = threadsWithUnsentMessages.get();
     for (const star of starStore.get()) {
       for (const thread of conversationsOf(star.homes, threads)) {
         const key = scopedKey(thread.environmentId, thread.id);
@@ -98,6 +108,8 @@ class StarConversations {
           continue;
         }
         if (threadStore.environment(thread.environmentId)?.features.settlement !== true || thread.working || lineageWorks(thread, threads)) continue;
+        // What the user wrote and has not sent would drop out of view with the conversation.
+        if (unsent.has(key)) continue;
         open.add(key);
         const stamp = stampOf(thread);
         let evaluation = this.evaluations.get(key);
@@ -148,9 +160,11 @@ class StarConversations {
       evaluation.wakefulness = state;
       evaluation.readAt = Date.now();
       const settled = projection.thread.settledOverride === "settled";
-      if (!settled && asleepBy(state, Date.now())) await settleQuietly(thread);
+      // Asked at the last moment of the store itself, loaded by now if it was not yet.
+      const unsent = await hasUnsentMessage(thread);
+      if (!settled && !unsent && asleepBy(state, Date.now())) await settleQuietly(thread);
       // Asleep, by this page or another: the store brings the settlement, and with it the transcript.
-      if (settled || asleepBy(state, Date.now())) evaluation.wakefulness = undefined;
+      if (settled || (!unsent && asleepBy(state, Date.now()))) evaluation.wakefulness = undefined;
     } catch (error) {
       console.warn(`[pult-shell] could not put the Star's conversation ${thread.id} to sleep: ${errorMessage(error)}`);
       // Read again a while later, as one held awake is.
