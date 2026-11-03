@@ -24,7 +24,7 @@ import { pickEnvironment } from "../connection/commands.ts";
 import { connection } from "../connection/index.ts";
 import { commonParent, folderShows, namesEnvironment, projectsUnder, PULT_SCHEME, relativeTo, toHostPath, toUriPath } from "../files/paths.ts";
 import { whenReady } from "../files/server.ts";
-import { knownRoots } from "../files/workspace.ts";
+import { knownRoots, projectRootPaths } from "../files/workspace.ts";
 import { type ProjectIconSource, threadProjectIcon } from "../threads/projectIcon.ts";
 import {
   type DraftSelection,
@@ -186,7 +186,8 @@ async function environmentFolder(environmentId: string): Promise<Folder> {
     if (knownRoots(environmentId).length === 0) throw error;
     return undefined;
   });
-  const path = commonParent(knownRoots(environmentId)) ?? home;
+  // The projects' roots alone: a worktree elsewhere, as under `~/.t3/worktrees`, would lift the folder to the home.
+  const path = commonParent(projectRootPaths(environmentId)) ?? home;
   if (path === undefined) throw new Error("The environment has no projects and no home folder.");
   const inHome = home === undefined ? undefined : relativeTo(home, path);
   const placed = inHome === undefined ? toHostPath(path) : inHome === "" ? "~" : `~/${inHome}`;

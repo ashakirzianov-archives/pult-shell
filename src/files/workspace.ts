@@ -96,8 +96,8 @@ export function whenListed(environmentId: string): Promise<void> {
 /**
  * The environment's projects and threads as the store has them, in the shape
  * of the server's shell that `projects.ts` takes: a project only a thread
- * names stands in for one the model does not list, and the store carries
- * no worktrees yet.
+ * names stands in for one the model does not list, and a thread whose
+ * checkout is not its project's root runs in that worktree.
  */
 export function environmentShell(environmentId: string) {
   const state = threadStore.get();
@@ -115,7 +115,10 @@ export function environmentShell(environmentId: string) {
     threads: threads.map((thread) => ({
       id: ThreadId.make(thread.id),
       projectId: ProjectId.make(thread.projectId),
-      worktreePath: null,
+      worktreePath:
+        thread.checkoutRoot !== null && (thread.projectRoot === null || toUriPath(thread.checkoutRoot) !== toUriPath(thread.projectRoot))
+          ? thread.checkoutRoot
+          : null,
       branch: thread.branch,
       deletedAt: null,
       updatedAt: DateTime.makeUnsafe(thread.updatedAt),
@@ -127,6 +130,13 @@ export function environmentShell(environmentId: string) {
 /** The environment's project and worktree roots as `pult:` URI paths, as the store lists them. */
 export function knownRoots(environmentId: string): ReadonlyArray<string> {
   return projectRoots(environmentShell(environmentId)).map((root) => toUriPath(root.path));
+}
+
+/** The environment's project roots alone as `pult:` URI paths, which its folder is the closest directory above (`src/panel/explorer.ts`). */
+export function projectRootPaths(environmentId: string): ReadonlyArray<string> {
+  return projectRoots(environmentShell(environmentId))
+    .filter((root) => root.worktree === null)
+    .map((root) => toUriPath(root.path));
 }
 
 /** The workbench as the environment's files see it: its folders and open models on that environment. */
