@@ -14,7 +14,12 @@ export interface CommitProgress {
   readonly result: GitRunStackedActionResult | null;
 }
 
-export const COMMIT_STARTED: CommitProgress = { label: "Committing…", phaseLabel: "Committing…", output: null, failure: null, result: null };
+/** An action's progress before the server's first event, reading `label`. */
+export function actionStarted(label: string): CommitProgress {
+  return { label, phaseLabel: label, output: null, failure: null, result: null };
+}
+
+export const COMMIT_STARTED = actionStarted("Committing…");
 
 /** The progress after one of the server's events, as upstream's source control control follows them. */
 export function commitProgress(current: CommitProgress, event: GitActionProgressEvent): CommitProgress {

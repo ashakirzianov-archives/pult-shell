@@ -12,6 +12,7 @@ import {
   IProgressService,
   IQuickInputService,
   ISCMService,
+  ISCMViewService,
   ITextModelService,
   IUriIdentityService,
   IViewsService,
@@ -51,9 +52,10 @@ import { threadProjectIcon } from "../threads/projectIcon.ts";
 import { scopedKey, type ShellThread, threadStore } from "../threads/store.ts";
 import { setChangesCard, mountChangesCard } from "./card.tsx";
 import { type Change, type Checkout, checkoutKey, checkoutName, checkoutsOf, shownChanges } from "./checkouts.ts";
-import { COMMIT_STARTED, commitFailure, commitPlaceholder, type CommitProgress, commitProgress } from "./commit.ts";
+import { actionStarted, COMMIT_STARTED, commitFailure, commitPlaceholder, type CommitProgress, commitProgress } from "./commit.ts";
 import { type ChangeType, patchFiles } from "./patch.ts";
 import { changesServer } from "./server.ts";
+import { hasSync, pullFailure, SYNC_INTERVAL_MS, syncAction, syncState, type SyncState, syncSteps, syncTitle, syncTooltip } from "./sync.ts";
 
 /** The scheme of a change's two sides, served by the view's content provider from the server's file contents RPC. */
 const DIFF_SCHEME = "pult-diff";
@@ -67,6 +69,13 @@ const REFRESH_CONCURRENCY = 4;
 const FILE_CHANGE_DELAY_MS = 300;
 /** Commits a checkout, the one its key names, else the filter's or a pick of those shown with uncommitted changes. */
 const COMMIT_COMMAND = "pult-shell.commit";
+/** Commits a checkout and pushes it, picked as Commit picks. */
+const COMMIT_PUSH_COMMAND = "pult-shell.commitAndPush";
+/** Pulls then pushes a checkout, the one its key names, else the filter's or a pick of those with commits to sync. */
+const SYNC_COMMAND = "pult-shell.sync";
+const PULL_COMMAND = "pult-shell.pull";
+/** Pushes a checkout's branch, publishing it when it has no upstream. */
+const PUSH_COMMAND = "pult-shell.push";
 
 /** While the view shows one thread's checkout, under its card: for `when` clauses. */
 const ChangesFilteredContext = new RawContextKey<boolean>("pult.changesFiltered", false);
@@ -284,12 +293,18 @@ interface Entry {
   registered: { readonly repository: ISCMRepository; readonly provider: ChangesProvider } | undefined;
   /** The message box's text, kept while the view does not show the checkout; null until it first shows. */
   message: string | null;
-  /** The commit under way, as its progress events have it. */
-  committing: CommitProgress | undefined;
+  /** The commit, push, pull or sync under way, as its progress events have it. */
+  running: CommitProgress | undefined;
+  /** Its branch against its upstream, after the last status read; undefined before one, or off a repository. */
+  sync: SyncState | undefined;
+  /** When its status was last asked for, which every read fetches, so a read waits `SYNC_INTERVAL_MS` unless forced. */
+  syncReadAt: number | undefined;
+  syncGeneration: number;
 }
 
 type Services = {
   readonly scm: ISCMService;
+  readonly scmView: ISCMViewService;
   readonly models: IModelService;
   readonly editors: IEditorService;
   readonly commands: ICommandService;
@@ -351,9 +366,10 @@ class ChangesView {
 
   /** Starts following the store, the selection and Source Control's visibility, with the `pult-diff:` sides and the badges registered. */
   static async start(): Promise<ChangesView> {
-    const [scm, models, languages, editors, commands, textModels, decorations, uriIdentity, contextKeys, views, notifications, progress, quickInput, files, host] =
+    const [scm, scmView, models, languages, editors, commands, textModels, decorations, uriIdentity, contextKeys, views, notifications, progress, quickInput, files, host] =
       await Promise.all([
         getService(ISCMService),
+        getService(ISCMViewService),
         getService(IModelService),
         getService(ILanguageService),
         getService(IEditorService),
@@ -371,7 +387,7 @@ class ChangesView {
       ]);
     const filteredKey = ChangesFilteredContext.bindTo(contextKeys);
     const view = new ChangesView(
-      { scm, models, editors, commands, notifications, progress, quickInput, extUri: uriIdentity.extUri, filteredKey },
+      { scm, scmView, models, editors, commands, notifications, progress, quickInput, extUri: uriIdentity.extUri, filteredKey },
       views,
     );
     textModels.registerTextModelContentProvider(DIFF_SCHEME, {
@@ -449,7 +465,10 @@ class ChangesView {
         generation: 0,
         registered: undefined,
         message: null,
-        committing: undefined,
+        running: undefined,
+        sync: undefined,
+        syncReadAt: undefined,
+        syncGeneration: 0,
       };
       this.entries.set(key, entry);
       added.push(entry);
@@ -468,7 +487,8 @@ class ChangesView {
     this.finished = finished;
     // Shown or not, so Source Control's badge counts every checkout.
     for (const entry of added) void this.refresh(entry, false);
-    for (const entry of ended) void this.refresh(entry, true);
+    // A run may have committed, so its upstream is asked about at once.
+    for (const entry of ended) void this.refresh(entry, true, true);
     this.render();
   }
 
@@ -502,13 +522,18 @@ class ChangesView {
     for (const entry of this.entries.values()) void this.refresh(entry, false);
   }
 
-  /** Reads what the view shows again; `force` asks anew even for a checkout already being read. */
+  /** Reads what the view shows again; `force` asks anew even for a checkout already being read, and for its status within its interval. */
   refreshScope(force: boolean): void {
-    for (const entry of this.scope()) void this.refresh(entry, force);
+    for (const entry of this.scope()) void this.refresh(entry, force, force);
   }
 
-  /** The newest refresh of a checkout wins; an older one's answer is dropped. */
-  private refresh(entry: Entry, force: boolean): Promise<void> {
+  /**
+   * Reads a checkout's changes, and its status once its interval is up or
+   * with `fetch`; the newest refresh of a checkout wins, an older one's
+   * answer dropped.
+   */
+  private refresh(entry: Entry, force: boolean, fetch = false): Promise<void> {
+    void this.readSync(entry, fetch);
     if (entry.loading !== undefined && !force) return entry.loading;
     const generation = ++entry.generation;
     const { environmentId, root } = entry.checkout;
@@ -536,6 +561,26 @@ class ChangesView {
     return entry.loading;
   }
 
+  /** The checkout's status against its upstream, unless read within `SYNC_INTERVAL_MS` and not forced; the newest read wins. */
+  private async readSync(entry: Entry, force: boolean): Promise<void> {
+    const now = Date.now();
+    if (!force && entry.syncReadAt !== undefined && now - entry.syncReadAt < SYNC_INTERVAL_MS) return;
+    entry.syncReadAt = now;
+    const generation = ++entry.syncGeneration;
+    const { environmentId, root } = entry.checkout;
+    let sync: SyncState | undefined;
+    try {
+      sync = syncState(await limited(() => changesServer(environmentId).status(root)));
+    } catch {
+      // Not a repository, a worktree gone: nothing to sync.
+      sync = undefined;
+    }
+    if (generation !== entry.syncGeneration || this.entries.get(entry.key) !== entry) return;
+    if (JSON.stringify(sync) === JSON.stringify(entry.sync)) return;
+    entry.sync = sync;
+    this.render();
+  }
+
   /** The filter's thread's turn, when loaded and read under the thread's checkout. */
   private shownTurn(): Turn | undefined {
     const thread = this.filterThread();
@@ -556,7 +601,7 @@ class ChangesView {
     const turn = this.shownTurn();
     const decorated = new Map<string, Change>();
     for (const entry of this.entries.values()) {
-      const shows = thread === undefined ? entry.shown !== undefined : entry === narrowed;
+      const shows = thread === undefined ? entry.shown !== undefined || hasSync(entry.sync) : entry === narrowed;
       if (!shows) {
         entry.registered?.repository.dispose();
         entry.registered = undefined;
@@ -566,7 +611,7 @@ class ChangesView {
       const registered = entry.registered;
       const entryTurn = entry === narrowed ? turn : undefined;
       if (entryTurn === undefined) for (const change of entry.shown?.changes ?? []) decorated.set(decorationKey(fileUri(change)), change);
-      this.syncCommit(entry, entryTurn !== undefined);
+      this.syncActions(entry, entryTurn !== undefined);
       const { provider } = registered;
       if (provider.rendered?.version === entry.version && provider.rendered.turn === entryTurn) continue;
       provider.rendered = { version: entry.version, turn: entryTurn };
@@ -601,7 +646,7 @@ class ChangesView {
 
   /** A checkout's source control, its message box holding what the user last typed in it. */
   private register(entry: Entry): NonNullable<Entry["registered"]> {
-    const { scm, models, extUri } = this.services;
+    const { scm, scmView, models, extUri } = this.services;
     const { checkout } = entry;
     // The view's input widget takes the model; the input's value is what it holds.
     const input = models.createModel("", null, URI.from({ scheme: "pult-scm-input", path: `/${++inputs}` }));
@@ -609,6 +654,9 @@ class ChangesView {
     const name = environment === undefined ? checkoutName(checkout) : `${checkoutName(checkout)} (${environment})`;
     const provider = new ChangesProvider(checkout, pultUri(checkout.environmentId, checkout.root), name, input, extUri);
     const repository = scm.registerSCMProvider(provider);
+    // The view decides which checkouts show; the workbench, while repositories still arrive after a reload, hides one it
+    // knew but did not show last time, from Source Control and from the badge.
+    scmView.toggleVisibility(repository, true);
     // The input starts from its history's latest entry, which holds the text a reload left in the box: the checkout's first
     // showing takes it, a later one the text the box held when the view last showed the checkout.
     if (entry.message === null) entry.message = repository.input.value;
@@ -627,120 +675,284 @@ class ChangesView {
   }
 
   /**
-   * The checkout's message box and Commit button: hidden under a turn, which
-   * is history, else the box with its branch in the placeholder, and the
-   * button, enabled while the working tree has changes and no commit runs,
-   * showing the commit's step while one does.
+   * The checkout's message box and its action button: hidden under a turn,
+   * which is history, else the box with its branch in the placeholder, and
+   * the button (`syncAction`): Commit, with Commit & Push beside it, while the
+   * working tree has changes, else Sync with its counts, else Publish Branch,
+   * else Commit disabled; while an action runs, its step.
    */
-  private syncCommit(entry: Entry, turnShown: boolean): void {
+  private syncActions(entry: Entry, turnShown: boolean): void {
     const registered = entry.registered;
     if (registered === undefined) return;
     const { repository, provider } = registered;
     if (repository.input.visible === turnShown) repository.input.visible = !turnShown;
-    // A worktree's branch is its own; a project's root records none, but the filter's thread on it does.
-    const filtered = this.filterThread();
-    const branch = entry.checkout.worktree?.branch ?? (filtered !== undefined && this.entryOf(filtered) === entry ? filtered.branch : null);
+    const branch = this.branchOf(entry);
     const placeholder = commitPlaceholder(branch);
     if (repository.input.placeholder !== placeholder) repository.input.placeholder = placeholder;
-    const committing = entry.committing;
+    const button = turnShown ? undefined : this.actionButton(entry, branch);
+    if (JSON.stringify(button) !== JSON.stringify(provider.actionButton.get())) provider.actionButton.set(button, undefined);
+  }
+
+  /** The checkout's branch: its status's, else a worktree's own, else the filter's thread's on it, which a project's root does not record. */
+  private branchOf(entry: Entry): string | null {
+    if (entry.sync?.branch != null) return entry.sync.branch;
+    const filtered = this.filterThread();
+    return entry.checkout.worktree?.branch ?? (filtered !== undefined && this.entryOf(filtered) === entry ? filtered.branch : null);
+  }
+
+  private actionButton(entry: Entry, branch: string | null): ISCMActionButtonDescriptor {
     const on = branch === null ? "" : ` on "${branch}"`;
-    const button: ISCMActionButtonDescriptor | undefined = turnShown
-      ? undefined
-      : {
+    const running = entry.running;
+    if (running !== undefined) {
+      return { command: { id: COMMIT_COMMAND, title: `$(loading~spin) ${running.label}`, tooltip: running.label, arguments: [entry.key] }, enabled: false };
+    }
+    const action = syncAction(entry.shown?.kind === "working-tree", entry.sync);
+    switch (action.kind) {
+      case "commit":
+        return {
           command: {
             id: COMMIT_COMMAND,
-            title: committing === undefined ? "$(check) Commit" : `$(loading~spin) ${committing.label}`,
-            tooltip: committing === undefined ? `Commit All Changes${on}, untracked files included; with no message, the server writes one` : committing.label,
+            title: "$(check) Commit",
+            tooltip: `Commit All Changes${on}, untracked files included; with no message, the server writes one`,
             arguments: [entry.key],
           },
-          enabled: committing === undefined && entry.shown?.kind === "working-tree",
+          ...(action.enabled ? { secondaryCommands: [[{ id: COMMIT_PUSH_COMMAND, title: "Commit & Push", arguments: [entry.key] }]] } : {}),
+          enabled: action.enabled,
         };
-    if (JSON.stringify(button) !== JSON.stringify(provider.actionButton.get())) provider.actionButton.set(button, undefined);
+      case "sync":
+        return {
+          command: {
+            id: SYNC_COMMAND,
+            title: syncTitle("sync", action.ahead, action.behind),
+            tooltip: `${syncTooltip(action.ahead, action.behind)}${on}`,
+            arguments: [entry.key],
+          },
+          enabled: true,
+        };
+      case "diverged":
+        return {
+          command: {
+            id: SYNC_COMMAND,
+            title: syncTitle("diverged", action.ahead, action.behind),
+            tooltip: `"${branch ?? "HEAD"}" has diverged from its upstream, which a fast-forward pull refuses; merge or rebase it in a terminal`,
+            arguments: [entry.key],
+          },
+          enabled: false,
+        };
+      case "publish":
+        return {
+          command: { id: PUSH_COMMAND, title: "$(cloud-upload) Publish Branch", tooltip: `Push "${branch}" and set its upstream`, arguments: [entry.key] },
+          enabled: true,
+        };
+    }
+  }
+
+  /** Runs `action` on the checkout, its step on the button and the view's progress bar, reading it again after, since a hook may have changed its files. */
+  private async runAction(entry: Entry, label: string, action: (progressed: (next: CommitProgress) => void) => Promise<void>): Promise<void> {
+    if (entry.running !== undefined) return;
+    const progressed = (next: CommitProgress) => {
+      entry.running = next;
+      this.syncActions(entry, entry.registered?.provider.rendered?.turn !== undefined);
+    };
+    progressed(actionStarted(label));
+    try {
+      await this.services.progress.withProgress({ location: ProgressLocation.Scm }, () => action(progressed));
+    } finally {
+      entry.running = undefined;
+      this.syncActions(entry, entry.registered?.provider.rendered?.turn !== undefined);
+    }
+    if (this.entries.get(entry.key) === entry) await this.refresh(entry, true, true);
   }
 
   /**
    * Commits every change of the checkout's working tree, untracked files
    * included, with the message box's text, or with none a message the
-   * server writes; the box cleared on a commit, kept on a failure, which a
-   * notification tells with the server's message, and the checkout read
-   * again either way, since a hook may have changed its files.
+   * server writes, and with `push` pushes it after; the box cleared on a
+   * commit, kept on a failure, which a notification tells with the
+   * server's message.
    */
-  async commit(entry: Entry): Promise<void> {
-    if (entry.committing !== undefined) return;
-    const { environmentId, root, projectId } = entry.checkout;
-    const name = entry.registered?.provider.name ?? checkoutName(entry.checkout);
+  async commit(entry: Entry, push = false): Promise<void> {
+    const name = this.nameOf(entry);
     const message = (entry.message ?? "").trim();
-    const thread = this.threadOn(entry);
-    let latest = COMMIT_STARTED;
-    const progressed = (next: CommitProgress) => {
-      latest = next;
-      entry.committing = next;
-      this.syncCommit(entry, entry.registered?.provider.rendered?.turn !== undefined);
-    };
-    progressed(COMMIT_STARTED);
-    const { notifications, progress } = this.services;
-    try {
-      await progress.withProgress({ location: ProgressLocation.Scm }, () =>
-        changesServer(environmentId).runStackedAction(
-          {
-            actionId: globalThis.crypto.randomUUID(),
-            cwd: root,
-            action: "commit",
-            ...(message === "" ? {} : { commitMessage: message }),
-            ...(thread === undefined ? {} : { threadId: ThreadId.make(thread.id) }),
-            projectId: ProjectId.make(projectId),
-          },
-          (event) => progressed(commitProgress(latest, event)),
-        ),
-      );
-      const { result } = latest;
-      if (result?.commit.status === "skipped_no_changes") {
-        notifications.info(`Pult: nothing to commit in ${name}.`);
-      } else if (result?.commit.status === "created") {
-        entry.message = "";
-        // Not transient, so the message joins the box's history.
-        entry.registered?.repository.input.setValue("", false);
-        if (message === "") notifications.info(`Pult: ${[result.toast.title, result.toast.description].filter(Boolean).join(": ")}`);
+    await this.runAction(entry, COMMIT_STARTED.label, async (progressed) => {
+      const { notifications } = this.services;
+      try {
+        const latest = await this.stacked(entry, push ? "commit_push" : "commit", message, progressed);
+        const result = latest.result;
+        if (result?.commit.status === "skipped_no_changes") {
+          notifications.info(`Pult: nothing to commit in ${name}.`);
+        } else if (result?.commit.status === "created") {
+          entry.message = "";
+          // Not transient, so the message joins the box's history.
+          entry.registered?.repository.input.setValue("", false);
+          if (message === "" || push) notifications.info(`Pult: ${toast(result)}`);
+        }
+      } catch (error) {
+        notifications.error(`Pult could not ${push ? "commit and push" : "commit"} in ${name}. ${error instanceof ActionFailed ? error.message : String(error)}`);
       }
-    } catch (error) {
-      console.error("[pult-shell] the commit failed", error);
-      notifications.error(`Pult could not commit in ${name}. ${commitFailure(latest, error)}`);
-    } finally {
-      entry.committing = undefined;
-      this.syncCommit(entry, entry.registered?.provider.rendered?.turn !== undefined);
-    }
-    if (this.entries.get(entry.key) === entry) void this.refresh(entry, true);
+    });
   }
 
-  /** `pult-shell.commit [checkoutKey]`: the checkout named, else the filter's, else one of those shown with uncommitted changes, picked while several. */
-  async commitCommand(key: string | null): Promise<void> {
+  /** Pushes the checkout's branch, publishing it with an upstream when it has none. */
+  async push(entry: Entry): Promise<void> {
+    const name = this.nameOf(entry);
+    await this.runAction(entry, "Pushing…", async (progressed) => {
+      try {
+        const latest = await this.stacked(entry, "push", "", progressed);
+        if (latest.result !== null) this.services.notifications.info(`Pult: ${toast(latest.result)}`);
+      } catch (error) {
+        this.services.notifications.error(`Pult could not push ${name}. ${error instanceof ActionFailed ? error.message : String(error)}`);
+      }
+    });
+  }
+
+  /** Fast-forwards the checkout's branch from its upstream; a diverged branch fails, told as such. */
+  async pull(entry: Entry): Promise<void> {
+    await this.runAction(entry, "Pulling…", async () => {
+      await this.pullStep(entry);
+    });
+  }
+
+  /** Pulls while behind, then pushes while ahead, stopping at the first failure. */
+  async sync(entry: Entry): Promise<void> {
+    const state = entry.sync;
+    if (state === undefined) return;
+    const name = this.nameOf(entry);
+    await this.runAction(entry, "Syncing…", async (progressed) => {
+      for (const step of syncSteps(state)) {
+        if (step === "pull") {
+          progressed(actionStarted("Pulling…"));
+          if (!(await this.pullStep(entry))) return;
+        } else {
+          progressed(actionStarted("Pushing…"));
+          try {
+            await this.stacked(entry, "push", "", progressed);
+          } catch (error) {
+            this.services.notifications.error(`Pult could not push ${name}. ${error instanceof ActionFailed ? error.message : String(error)}`);
+            return;
+          }
+        }
+      }
+      this.services.notifications.info(`Pult: synced ${name}.`);
+    });
+  }
+
+  /** One pull, its failure notified; whether it went through. */
+  private async pullStep(entry: Entry): Promise<boolean> {
+    const name = this.nameOf(entry);
+    try {
+      const result = await changesServer(entry.checkout.environmentId).pull(entry.checkout.root);
+      if (result.status === "skipped_up_to_date") this.services.notifications.info(`Pult: ${name} is up to date.`);
+      return true;
+    } catch (error) {
+      console.error("[pult-shell] the pull failed", error);
+      this.services.notifications.error(`Pult could not pull ${name}. ${pullFailure(entry.sync, errorDetail(error))}`);
+      return false;
+    }
+  }
+
+  /** The server's stacked action on the checkout, its progress through `progressed`; fails with `ActionFailed`, the server's message and a hook's last line. */
+  private async stacked(
+    entry: Entry,
+    action: "commit" | "commit_push" | "push",
+    message: string,
+    progressed: (next: CommitProgress) => void,
+  ): Promise<CommitProgress> {
+    const { environmentId, root, projectId } = entry.checkout;
+    const thread = this.threadOn(entry);
+    let latest = entry.running ?? COMMIT_STARTED;
+    try {
+      await changesServer(environmentId).runStackedAction(
+        {
+          actionId: globalThis.crypto.randomUUID(),
+          cwd: root,
+          action,
+          ...(message === "" ? {} : { commitMessage: message }),
+          ...(thread === undefined ? {} : { threadId: ThreadId.make(thread.id) }),
+          projectId: ProjectId.make(projectId),
+        },
+        (event) => {
+          latest = commitProgress(latest, event);
+          progressed(latest);
+        },
+      );
+      return latest;
+    } catch (error) {
+      console.error(`[pult-shell] the ${action} failed`, error);
+      throw new ActionFailed(commitFailure(latest, error));
+    }
+  }
+
+  private nameOf(entry: Entry): string {
+    return entry.registered?.provider.name ?? checkoutName(entry.checkout);
+  }
+
+  /**
+   * An action's command: the checkout its key names, else the filter's,
+   * else one of the checkouts `applies` to, picked while several.
+   */
+  async command(kind: ActionKind, key: string | null): Promise<void> {
+    const { run, applies, placeHolder, none } = this.actions[kind];
     if (key !== null) {
       const entry = this.entries.get(key);
-      if (entry !== undefined) await this.commit(entry);
+      if (entry !== undefined) await run(entry);
       return;
     }
     const thread = this.filterThread();
     const narrowed = thread === undefined ? undefined : this.entryOf(thread);
-    const candidates =
-      narrowed !== undefined
-        ? [narrowed]
-        : [...this.entries.values()].filter((entry) => entry.registered !== undefined && entry.shown?.kind === "working-tree");
+    const candidates = narrowed !== undefined ? [narrowed] : [...this.entries.values()].filter(applies);
     if (candidates.length === 0) {
-      this.services.notifications.info("Pult: no checkout the changes view shows has uncommitted changes.");
+      this.services.notifications.info(`Pult: ${none}`);
       return;
     }
-    if (candidates.length === 1) return this.commit(candidates[0]!);
+    if (candidates.length === 1) return run(candidates[0]!);
     const picked = await this.services.quickInput.pick(
       candidates.map((entry) => ({
-        label: entry.registered?.provider.name ?? checkoutName(entry.checkout),
+        label: this.nameOf(entry),
         description: entry.checkout.root,
-        detail: (entry.message ?? "").trim().split("\n")[0] || "No message: the server writes one",
+        detail:
+          kind === "commit" || kind === "commitAndPush"
+            ? (entry.message ?? "").trim().split("\n")[0] || "No message: the server writes one"
+            : syncDetail(entry.sync),
         entry,
       })),
-      { placeHolder: "Commit all changes of" },
+      { placeHolder },
     );
-    if (picked !== undefined) await this.commit(picked.entry);
+    if (picked !== undefined) await run(picked.entry);
   }
+
+  private readonly actions: Record<ActionKind, { run: (entry: Entry) => Promise<void>; applies: (entry: Entry) => boolean; placeHolder: string; none: string }> = {
+    commit: {
+      run: (entry) => this.commit(entry),
+      applies: (entry) => entry.registered !== undefined && entry.shown?.kind === "working-tree",
+      placeHolder: "Commit all changes of",
+      none: "no checkout the changes view shows has uncommitted changes.",
+    },
+    commitAndPush: {
+      run: (entry) => this.commit(entry, true),
+      applies: (entry) => entry.registered !== undefined && entry.shown?.kind === "working-tree",
+      placeHolder: "Commit and push all changes of",
+      none: "no checkout the changes view shows has uncommitted changes.",
+    },
+    sync: {
+      run: (entry) => this.sync(entry),
+      applies: (entry) => hasSync(entry.sync),
+      placeHolder: "Sync",
+      none: "no checkout has commits to pull or push.",
+    },
+    pull: {
+      run: (entry) => this.pull(entry),
+      applies: (entry) => entry.sync !== undefined && entry.sync.hasUpstream && entry.sync.behind > 0,
+      placeHolder: "Pull",
+      none: "no checkout is behind its upstream.",
+    },
+    push: {
+      run: (entry) => this.push(entry),
+      applies: (entry) => entry.sync !== undefined && entry.sync.branch !== null && (!entry.sync.hasUpstream ? entry.shown !== undefined : entry.sync.ahead > 0),
+      placeHolder: "Push",
+      none: "no checkout has commits to push.",
+    },
+  };
 
   /**
    * The Source Control view narrowed to `thread`, selected first if another
@@ -863,7 +1075,8 @@ class ChangesView {
         files: entry.shown?.changes.length ?? 0,
         loading: entry.loading !== undefined,
         failure: entry.failure,
-        committing: entry.committing?.label ?? null,
+        running: entry.running?.label ?? null,
+        sync: entry.sync ?? null,
       })),
     };
   }
@@ -871,6 +1084,32 @@ class ChangesView {
 
 function sameKeys(left: ReadonlyMap<string, unknown>, right: ReadonlyMap<string, unknown>): boolean {
   return left.size === right.size && [...left.keys()].every((key) => right.has(key));
+}
+
+type ActionKind = "commit" | "commitAndPush" | "sync" | "pull" | "push";
+
+/** A stacked action's failure, its message already the user's. */
+class ActionFailed extends Error {}
+
+/** The server's toast on a stacked action, title and description in one line. */
+function toast(result: NonNullable<CommitProgress["result"]>): string {
+  return [result.toast.title, result.toast.description].filter(Boolean).join(": ");
+}
+
+/** What a failed RPC says: the server's detail when it has one, else its message. */
+function errorDetail(error: unknown): string {
+  if (typeof error === "object" && error !== null) {
+    if ("detail" in error && typeof error.detail === "string") return error.detail;
+    if ("message" in error) return String(error.message);
+  }
+  return String(error);
+}
+
+/** A pick's line for a checkout's sync: its branch and counts. */
+function syncDetail(state: SyncState | undefined): string {
+  if (state === undefined) return "";
+  if (!state.hasUpstream) return `${state.branch ?? "HEAD"}: no upstream`;
+  return `${state.branch ?? "HEAD"}: ${state.behind} behind, ${state.ahead} ahead`;
 }
 
 let running = 0;
@@ -997,7 +1236,11 @@ export async function changesState() {
  * card's clear mark and the left panel's Source Control tab), "Pult: Refresh
  * Changes" (`pult-shell.refreshChanges`, also in the Source Control view's
  * title), "Pult: Commit" (`pult-shell.commit [checkoutKey]`, also each
- * checkout's Commit button and Cmd+Enter in its message box) and the card.
+ * checkout's Commit button and Cmd+Enter in its message box), "Pult: Commit
+ * & Push", "Pult: Sync", "Pult: Pull" and "Pult: Push"
+ * (`pult-shell.commitAndPush`, `.sync`, `.pull`, `.push`, each with an
+ * optional checkout key, also the checkout's button and its secondary
+ * command) and the card.
  */
 export function registerChanges(): void {
   started = ChangesView.start();
@@ -1053,10 +1296,28 @@ export function registerChanges(): void {
       }
 
       async run(_accessor: unknown, key: unknown): Promise<void> {
-        await (await started)?.commitCommand(typeof key === "string" ? key : null);
+        await (await started)?.command("commit", typeof key === "string" ? key : null);
       }
     },
   );
+  for (const [id, kind, title] of [
+    [COMMIT_PUSH_COMMAND, "commitAndPush", "Commit & Push"],
+    [SYNC_COMMAND, "sync", "Sync"],
+    [PULL_COMMAND, "pull", "Pull"],
+    [PUSH_COMMAND, "push", "Push"],
+  ] as const) {
+    registerAction2(
+      class extends Action2 {
+        constructor() {
+          super({ id, title: { value: title, original: title }, category, f1: true });
+        }
+
+        async run(_accessor: unknown, key: unknown): Promise<void> {
+          await (await started)?.command(kind, typeof key === "string" ? key : null);
+        }
+      },
+    );
+  }
   registerAction2(
     class extends Action2 {
       constructor() {
