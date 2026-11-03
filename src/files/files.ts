@@ -515,8 +515,11 @@ export class WorkspaceFiles implements Disposable {
 
   /**
    * The cwd and path an RPC names for `path`: relative to the innermost
-   * workspace folder holding it, else to a project or worktree root, else
-   * absolute against any root, as a thread's citation may be.
+   * workspace folder holding it, else to a project or worktree root, else,
+   * under neither, absolute against any root, which the server refuses as
+   * outside it (`workspace_path_outside_root`, a `NoPermissions`), and a
+   * stock server's stat takes for a file until a read refuses it. A thread's
+   * link outside every checkout never gets here (`src/files/resolve.ts`).
    */
   private target(path: string): Target {
     const folder = locate(this.host.roots(), path);

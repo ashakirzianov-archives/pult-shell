@@ -8,8 +8,9 @@ import type { ShellConnectionServices } from "./connectionRuntime.ts";
  * runs on, every environment's, where a thread the view navigates to opens,
  * where a project's new thread does, and where what the view would show in
  * its right panel goes instead (`rightPanel.ts`): a file, as a path relative
- * to the thread's project root or an absolute host path, with a line to
- * reveal; the thread's changes, with a file's path when one was named and a
+ * to the thread's checkout (its worktree, else its project's root) or an
+ * absolute host path, with a line to reveal, which the shell looks up across
+ * the environment's checkouts when the thread's lacks it; the thread's changes, with a file's path when one was named and a
  * turn's checkpoints when the view named a turn; and
  * what the view knows of its lineage's activity. Each names its
  * environment, as a pane mounts the view on one (`ThreadViewMounts`). It

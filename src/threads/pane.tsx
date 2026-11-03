@@ -20,7 +20,7 @@ import { allowNativeTextMenu } from "../nativeTextMenu.ts";
 import { isSettingsTab, type SettingsInput } from "../settings/pane.tsx";
 import { workbenchColorScheme } from "../theme.ts";
 import { ThreadBarEntries } from "./barEntries.tsx";
-import { openThreadFile } from "./files.ts";
+import { openThreadFile, registerOpenThreadFileCommand } from "./files.ts";
 import { projectIconUri, projectIcons, threadProjectIcon } from "./projectIcon.ts";
 import { isSubagent, type ShellProject, type ShellThread, threadStore } from "./store.ts";
 
@@ -410,8 +410,10 @@ interface SerializedDraftInput {
   readonly projectId: string;
 }
 
+/** The thread's editor pane and its serialisers, and `pult-shell.openThreadFile`, what the view's file links run (`files.ts`). */
 export function registerThreadPane(): void {
   registerEditorPane(PANE_ID, "Pult Thread", ThreadPane, [ThreadInput, DraftInput]);
+  registerOpenThreadFileCommand();
   // Serialisable, so the editor part's saved state and the per-selection working
   // sets (`selection.ts`) restore the thread's or draft's tab with the rest.
   registerEditorSerializer(
