@@ -1,4 +1,6 @@
 import type { ProjectDraft } from "../../thread-view/shell/drafts.ts";
+import { isStarRoot } from "../stars/record.ts";
+import { threadStore } from "../threads/store.ts";
 
 export type { ProjectDraft };
 
@@ -31,6 +33,11 @@ function lazyList<T>(initial: T, pick: (module: Source) => { get(): T; subscribe
       return () => listeners.delete(listener);
     },
   };
+}
+
+/** Whether `draft` is of a Star's project, whose draft is the Star's own (`src/stars/`) and has no card. */
+export function isStarDraft(draft: Pick<ProjectDraft, "environmentId" | "projectId">): boolean {
+  return isStarRoot(threadStore.project(draft.environmentId, draft.projectId)?.root);
 }
 
 /** The projects' unsent drafts, for Ready's draft cards. */

@@ -38,6 +38,12 @@ describe("checkoutsOf", () => {
     );
   });
 
+  test("leaves a Star's folder out", () => {
+    const star = "/Users/a/.pult/stars/star";
+    const checkouts = checkoutsOf({ projects: [project("a", "star", star)], threads: [thread("a", "star", star, star)] });
+    assert.deepEqual(checkouts, []);
+  });
+
   test("takes a project's root from its thread when the environment lists none", () => {
     const checkouts = checkoutsOf({ projects: [], threads: [thread("a", "solo", "/repos/solo", "/repos/solo/")] });
     assert.deepEqual(

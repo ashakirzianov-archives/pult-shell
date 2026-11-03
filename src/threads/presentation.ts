@@ -8,6 +8,7 @@ import { canSnooze, effectiveSnoozed, threadWokeAt } from "@t3tools/client-runti
 import { resolveSettledThreadTimestamp, sortPinnedThreadsByOrderKey, sortSettledThreads } from "@t3tools/client-runtime/state/thread-sort";
 import type { OrchestrationProjectShell } from "@t3tools/contracts";
 
+import { isStarRoot } from "../stars/record.ts";
 import { scopedKey, type ShellProject, type ShellThread, type ShelfName, type ThreadFeatures } from "./store.ts";
 
 /**
@@ -198,12 +199,20 @@ export interface EnvironmentShell {
   readonly features: ThreadFeatures;
 }
 
+/** Whether `thread` is a Star's, its project's root a Star's folder: the Star's conversation, on no shelf (`src/stars/`). */
+export function isStarThread(
+  thread: Pick<EnvironmentThreadShell, "projectId">,
+  projects: ReadonlyArray<Pick<OrchestrationProjectShell, "id" | "workspaceRoot">>,
+): boolean {
+  return isStarRoot(projects.find((project) => project.id === thread.projectId)?.workspaceRoot);
+}
+
 /**
  * The store's threads, every environment's: shelf by shelf, as upstream's
  * sidebar lists them (`shelve`), each in its shelf's order across the
  * environments; then the subagents, which upstream lists in their parent and
- * the panel under their root's card, on no shelf. Archived and deleted ones
- * go nowhere.
+ * the panel under their root's card, and the Stars' threads, each its Star's
+ * conversation, both on no shelf. Archived and deleted ones go nowhere.
  */
 export function shellThreads(
   environments: ReadonlyArray<EnvironmentShell>,
@@ -212,19 +221,24 @@ export function shellThreads(
 ): Array<ShellThread> {
   const threads = environments.flatMap((environment) => environment.threads);
   const features = new Map(environments.map((environment) => [environment.environmentId, environment.features]));
-  const shelves = shelve(threads, now, (environmentId) => features.get(environmentId) ?? NO_THREAD_FEATURES, observation);
-  const subagents = threads.filter((thread) => isPresent(thread) && thread.lineage.relationshipToParent === "subagent");
+  const featuresOf = (environmentId: string) => features.get(environmentId) ?? NO_THREAD_FEATURES;
   const byId = new Map(
     environments.flatMap((environment) =>
       environment.projects.map((project) => [scopedKey(environment.environmentId, project.id), project] as const),
     ),
   );
+  const inStar = (thread: EnvironmentThreadShell) => isStarRoot(byId.get(scopedKey(thread.environmentId, thread.projectId))?.workspaceRoot);
+  const shelves = shelve(threads.filter((thread) => !inStar(thread)), now, featuresOf, observation);
+  const subagents = threads.filter((thread) => isPresent(thread) && thread.lineage.relationshipToParent === "subagent");
+  const stars = threads.filter((thread) => isListed(thread) && inStar(thread));
   const present = (thread: EnvironmentThreadShell, shelf: ShelfName | null): ShellThread => {
     const project = byId.get(scopedKey(thread.environmentId, thread.projectId));
+    const settled = featuresOf(thread.environmentId).settlement && thread.settledOverride === "settled";
     return {
       environmentId: thread.environmentId,
       id: thread.id,
       shelf,
+      settled,
       parentId: thread.lineage.parentThreadId,
       rootId: thread.lineage.rootThreadId,
       projectId: thread.projectId,
@@ -237,7 +251,10 @@ export function shellThreads(
       branch: thread.branch,
       createdAt: thread.createdAt,
       updatedAt: thread.updatedAt,
-      ageFrom: shelf === "settled" ? resolveSettledThreadTimestamp(thread) : (thread.latestUserMessageAt ?? thread.updatedAt),
+      ageFrom:
+        shelf === "settled" || (shelf === null && settled)
+          ? resolveSettledThreadTimestamp(thread)
+          : (thread.latestUserMessageAt ?? thread.updatedAt),
       woke: isWoke(thread, now),
       working: threadStatus(thread, now)?.badge === "R",
       waiting: thread.runtime?.status === "idle",
@@ -254,5 +271,6 @@ export function shellThreads(
   return [
     ...SHELF_ORDER.flatMap((shelf) => shelves[shelf].map((thread) => present(thread, shelf))),
     ...subagents.map((thread) => present(thread, null)),
+    ...stars.map((thread) => present(thread, null)),
   ];
 }

@@ -82,4 +82,10 @@ describe("draftCards", () => {
     assert.deepEqual(projects("empty"), ["empty", "full"]);
     assert.deepEqual(projects("full"), ["full"]);
   });
+
+  test("leaves out a Star's draft", () => {
+    const drafts = [draft("full"), draft("star")];
+    const cards = draftCards(drafts, undefined, new Set(["env"]), (each) => each.projectId === "star");
+    assert.deepEqual(cards.map((each) => each.projectId), ["full"]);
+  });
 });

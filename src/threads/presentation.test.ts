@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
 import { presentThreadShell } from "@t3tools/client-runtime/state/models";
-import { EnvironmentId, type OrchestrationV2ThreadShell, RunId, RuntimeRequestId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, type OrchestrationV2ThreadShell, ProjectId, RunId, RuntimeRequestId, ThreadId } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
-import { v2ThreadShell } from "../../vendor/t3code/packages/client-runtime/src/state/orchestrationV2TestFixtures.ts";
+import { v2Project, v2ThreadShell } from "../../vendor/t3code/packages/client-runtime/src/state/orchestrationV2TestFixtures.ts";
 import { nextWake, NO_THREAD_FEATURES, shellThreads, shelve, threadStatus } from "./presentation.ts";
 
 const NOW = "2026-06-20T12:00:00.000Z";
@@ -201,6 +201,31 @@ describe("shellThreads", () => {
         ["settled", "2026-06-20T09:00:00.000Z"],
       ],
     );
+  });
+
+  test("puts a Star's threads on no shelf, dated by their settlement once asleep", () => {
+    const star = { ...v2Project, id: ProjectId.make("star"), workspaceRoot: "/Users/a/.pult/stars/star" };
+    const asleep = { projectId: star.id, settledOverride: "settled" as const, settledAt: at("2026-06-20T09:00:00.000Z") };
+    const threads = shellThreads(
+      [
+        {
+          environmentId: "env",
+          threads: [thread("awake", { projectId: star.id }), thread("asleep", asleep), thread("other", { projectId: v2Project.id })],
+          projects: [v2Project, star],
+          features: ALL,
+        },
+      ],
+      NOW,
+    );
+    assert.deepEqual(
+      threads.map((each) => [each.id, each.shelf, each.settled]),
+      [
+        ["other", "active", false],
+        ["awake", null, false],
+        ["asleep", null, true],
+      ],
+    );
+    assert.equal(threads.at(-1)?.ageFrom, "2026-06-20T09:00:00.000Z");
   });
 
   test("merges the environments' shelves, each thread shelved by its own server's features", () => {

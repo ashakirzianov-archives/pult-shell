@@ -48,13 +48,18 @@ export function shown<Item>(items: ReadonlyArray<Item>, expanded: boolean, isSel
   return selected === undefined ? [] : [selected];
 }
 
-/** Ready's draft cards: the drafts of held environments with something in them, newest first, and the `selected` one even while empty, first. */
+/**
+ * Ready's draft cards: the drafts of held environments with something in
+ * them, newest first, and the `selected` one even while empty, first; none
+ * of a Star's project (`isStars`), whose draft is the Star's own.
+ */
 export function draftCards(
   drafts: ReadonlyArray<ProjectDraft>,
   selected: Pick<ProjectDraft, "environmentId" | "projectId"> | undefined,
   environmentIds: ReadonlySet<string>,
+  isStars: (draft: Pick<ProjectDraft, "environmentId" | "projectId">) => boolean = () => false,
 ): ReadonlyArray<ProjectDraft> {
-  const held = drafts.filter((draft) => environmentIds.has(draft.environmentId));
+  const held = drafts.filter((draft) => environmentIds.has(draft.environmentId) && !isStars(draft));
   if (selected === undefined || !environmentIds.has(selected.environmentId)) return held;
   if (held.some((draft) => draftKey(draft) === draftKey(selected))) return held;
   return [{ environmentId: selected.environmentId, projectId: selected.projectId, preview: "", createdAt: "" }, ...held];

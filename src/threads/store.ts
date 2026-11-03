@@ -8,8 +8,10 @@ export interface ShellThread {
   /** Its environment: thread ids are unique only within one. */
   readonly environmentId: string;
   readonly id: string;
-  /** Its shelf; null for a subagent, which the panel lists under its root's card. */
+  /** Its shelf; null for a subagent, which the panel lists under its root's card, and for a Star's thread, the Star's conversation (`src/stars/`). */
   readonly shelf: ShelfName | null;
+  /** Settled, whatever its shelf: a Star's thread, on none, is asleep so. */
+  readonly settled: boolean;
   /** The thread that spawned or forked it, in the same environment; null for a thread of its own. */
   readonly parentId: string | null;
   /** The top of its lineage, itself for a thread of its own. */
@@ -61,6 +63,8 @@ export interface ShellEnvironment {
   readonly phase: string;
   /** What its server lets a client do to a thread. */
   readonly features: ThreadFeatures;
+  /** Whether its threads and projects are in: until then the store lists none of them. */
+  readonly loaded: boolean;
 }
 
 /** A project of an environment, threads or none: what a new thread's draft shows of it. */

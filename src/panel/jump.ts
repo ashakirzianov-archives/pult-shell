@@ -16,7 +16,7 @@ import {
 } from "../threads/selection.ts";
 import { isSubagent, scopedKey, threadStore } from "../threads/store.ts";
 import { storedExpanded } from "./collapsible.tsx";
-import { projectDrafts } from "./drafts.ts";
+import { isStarDraft, projectDrafts } from "./drafts.ts";
 import { exploredEnvironment } from "./explorer.ts";
 import { draftCards, draftKey, environmentKey, jumpTargets, type JumpTarget, SETTLED_TAIL_INITIAL_COUNT } from "./order.ts";
 import { settledShelf } from "./settings.ts";
@@ -70,7 +70,7 @@ function currentTargets(): JumpTarget<URI>[] {
   return jumpTargets({
     environmentIds,
     explorer: { files: openExplorerFiles.get().files, highlighted: explorerHighlight(), expanded: storedExpanded(EXPANDED_KEYS.explorer, true) },
-    drafts: draftCards(projectDrafts.get(), selectedDraft(), new Set(environmentIds)),
+    drafts: draftCards(projectDrafts.get(), selectedDraft(), new Set(environmentIds), isStarDraft),
     threads,
     selection: selectedCardKey(),
     expanded: {

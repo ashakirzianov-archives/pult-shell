@@ -17,6 +17,7 @@ import { request } from "@t3tools/client-runtime/rpc";
 import { CommandId, ProjectId, WS_METHODS } from "@t3tools/contracts";
 
 import { connection, ConnectedContext, pickEnvironment } from "../connection/index.ts";
+import { isStarRoot } from "../stars/record.ts";
 import { threadStore } from "../threads/store.ts";
 import { baseName, folderShows, joinPath, parentOf, projectsUnder, toHostPath, toUriPath } from "./paths.ts";
 import { type ProjectRoot, projectRoots } from "./projects.ts";
@@ -193,7 +194,8 @@ async function openProject(accessor: ServicesAccessor): Promise<void> {
   const environmentId = environment.environmentId;
   const label = threadStore.distinguishing(environmentId);
   const named = (name: string) => (label === undefined ? name : `${name} (${label})`);
-  const roots = projectRoots(environmentShell(environmentId));
+  // A Star's folder is no project of the user's (`src/stars/`).
+  const roots = projectRoots(environmentShell(environmentId)).filter((root) => !isStarRoot(root.path));
   const listed: Array<ProjectItem | IQuickPickSeparator> = [];
   for (const root of roots) {
     if (root.worktree === null) listed.push({ type: "separator", label: root.project });

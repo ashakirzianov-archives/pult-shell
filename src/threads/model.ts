@@ -19,7 +19,8 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import { connection, environmentName } from "../connection/index.ts";
 import { OlderSettledThreads } from "./olderSettled.ts";
-import { type EnvironmentShell, nextWake, NO_THREAD_FEATURES, shellProject, shelfOf, shellThreads } from "./presentation.ts";
+import { isStarRoot } from "../stars/record.ts";
+import { type EnvironmentShell, isStarThread, nextWake, NO_THREAD_FEATURES, shellProject, shelfOf, shellThreads } from "./presentation.ts";
 import { type ThreadFeatures, threadStore } from "./store.ts";
 
 // The longest a wake waits between checks of the clock: a timer's clock stops while the machine sleeps, so a wake due
@@ -210,6 +211,7 @@ class ThreadsModel {
         name: environmentName(environment, connection.environments),
         phase: environment.phase,
         features: followed.features ?? NO_THREAD_FEATURES,
+        loaded: followed.held !== null && followed.features !== null,
       })),
       threads,
       settled,
@@ -227,8 +229,18 @@ class ThreadsModel {
    * fewer threads are listed than the shelf shows (`wantedOlderSettledPages`), which reads them.
    */
   private settled(followed: ReadonlyArray<Followed>, now: string, listed: number) {
+    // The Stars' threads are on no shelf, the settled ones among them.
     const held = followed.flatMap(({ held, features, olderSettled }) =>
-      held === null || features === null ? [] : [{ threads: held.threads, features, olderSettled }],
+      held === null || features === null
+        ? []
+        : [
+            {
+              threads: held.threads.filter((thread) => !isStarThread(thread, held.snapshot.projects)),
+              projects: held.snapshot.projects,
+              features,
+              olderSettled,
+            },
+          ],
     );
     const threads = held.flatMap((environment) => environment.threads);
     const shelf = new Map(
@@ -251,7 +263,14 @@ class ThreadsModel {
     }
     const unloaded = unloadedOlderSettledCount({
       olderSettled: (environmentId) => shelf.get(environmentId)?.older ?? null,
-      scopes: [...shelf.keys()].map((environmentId) => ({ environmentId, projectIds: null })),
+      // An environment with a Star counts the older settled threads of its other projects alone.
+      scopes: held.map(({ olderSettled, projects }) => {
+        const shown = projects.filter((project) => !isStarRoot(project.workspaceRoot));
+        return {
+          environmentId: EnvironmentId.make(olderSettled.environmentId),
+          projectIds: shown.length === projects.length ? null : shown.map((project) => project.id),
+        };
+      }),
       threads,
     });
     const pages = [...shelf.values()].map((environment) => environment.pages.status);

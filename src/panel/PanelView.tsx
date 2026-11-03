@@ -17,7 +17,7 @@ import {
 } from "../threads/store.ts";
 import { CollapsibleHeader, useExpanded } from "./collapsible.tsx";
 import { DraftCard, EnvironmentChip } from "./DraftCard.tsx";
-import { type ProjectDraft, projectDrafts, threadsWithUnsentMessages } from "./drafts.ts";
+import { isStarDraft, type ProjectDraft, projectDrafts, threadsWithUnsentMessages } from "./drafts.ts";
 import { ExplorerShelf } from "./ExplorerShelf.tsx";
 import { EXPANDED_KEYS, selectionSnapshot, showingSettled } from "./jump.ts";
 import { JumpHint } from "./JumpHint.tsx";
@@ -119,7 +119,7 @@ export function PanelView() {
       : selection;
   // The drafts with something in them, and the selected one even while it is empty, first.
   const isSelectedDraft = (candidate: ProjectDraft) => draftKey(candidate) === selection;
-  const draftCards = draftCardsOf(drafts, draft, new Set(environments.keys()));
+  const draftCards = draftCardsOf(drafts, draft, new Set(environments.keys()), isStarDraft);
   const draftCard = (candidate: ProjectDraft) => (
     <DraftCard
       key={draftKey(candidate)}

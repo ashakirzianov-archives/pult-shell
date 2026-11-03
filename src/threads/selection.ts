@@ -21,6 +21,7 @@ import { GroupsOrder } from "@codingame/monaco-vscode-api/vscode/vs/workbench/se
 import { IEditorService } from "@codingame/monaco-vscode-api/vscode/vs/workbench/services/editor/common/editorService.service";
 
 import { SettingsInput } from "../settings/pane.tsx";
+import { isStarRoot } from "../stars/record.ts";
 import { DraftInput, isLeadTab, onDidPromoteDraft, ThreadInput } from "./pane.tsx";
 import { isSubagent, type ShellProject, type ShelfName, threadStore } from "./store.ts";
 
@@ -560,7 +561,10 @@ function registerNewThreadCommand(): void {
         const current = selectedDraft() ?? (thread && { environmentId: thread.environmentId, projectId: thread.projectId });
         const isCurrent = (project: ShellProject) =>
           Number(project.id === current?.projectId && project.environmentId === current.environmentId);
-        const sorted = projects.toSorted((left, right) => isCurrent(right) - isCurrent(left) || left.name.localeCompare(right.name));
+        // A Star's project is no project of the user's (`src/stars/`).
+        const sorted = projects
+          .filter((project) => !isStarRoot(project.root))
+          .toSorted((left, right) => isCurrent(right) - isCurrent(left) || left.name.localeCompare(right.name));
         if (sorted.length === 0) return notifications.info("No connected environment has projects.");
         const chosen =
           sorted.length === 1
