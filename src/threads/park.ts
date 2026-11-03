@@ -21,6 +21,7 @@ import * as Effect from "effect/Effect";
 import { connection } from "../connection/index.ts";
 import { nextAfterParking, type ParkActions, parkActions, parseCustomSnooze } from "./parking.ts";
 import { NO_THREAD_FEATURES } from "./presentation.ts";
+import { starStore } from "../stars/model.ts";
 import { isStarRoot } from "../stars/record.ts";
 import { onDidSelectThread, selectedThread, selectionTarget, selectThread } from "./selection.ts";
 import { scopedKey, type ShellThread, type ThreadFeatures, threadStore } from "./store.ts";
@@ -350,6 +351,8 @@ export function registerParkCommands(): void {
       }
     };
     threadStore.subscribe(update);
+    // A selected Star's conversation is the target, and it changes as the Stars do.
+    starStore.subscribe(update);
     onDidSelectThread(update);
     update();
   });

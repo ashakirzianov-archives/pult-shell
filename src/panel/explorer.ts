@@ -23,6 +23,7 @@ import { connection } from "../connection/index.ts";
 import { commonParent, folderShows, namesEnvironment, projectsUnder, PULT_SCHEME, relativeTo, toHostPath, toUriPath } from "../files/paths.ts";
 import { environmentHome } from "../files/server.ts";
 import { knownRoots, projectRootPaths } from "../files/workspace.ts";
+import { starStore } from "../stars/model.ts";
 import { type ProjectIconSource, threadProjectIcon } from "../threads/projectIcon.ts";
 import {
   type DraftSelection,
@@ -344,10 +345,12 @@ export async function followExplorerScope(): Promise<void> {
     } else if (effectiveRoot() !== undefined) void setScope("environment").then(reroot).then(reveal);
   });
   // A Star's conversation moves from thread to thread, and wakes from its draft, as the store changes.
-  threadStore.subscribe(() => {
+  const follow = () => {
     followSelection();
     void reroot();
-  });
+  };
+  threadStore.subscribe(follow);
+  starStore.subscribe(follow);
   await reroot();
 }
 
