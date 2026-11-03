@@ -4,7 +4,7 @@ import { IContextMenuService } from "@codingame/monaco-vscode-api/vscode/vs/plat
 import { elapsedShare, formatResetsIn, type LimitAccount } from "@t3tools/shared/usageLimits";
 import { useEffect, useRef, useSyncExternalStore } from "react";
 
-import { usageProvider } from "../../thread-view/shell/usageProviders.ts";
+import { hasUsageProviderIcon, UsageProviderIcon, usageProvider } from "../../thread-view/shell/usageProviders.tsx";
 import { setUsageLimitsMode, USAGE_LIMITS_MODES, usageLimitsMode } from "../limits/index.ts";
 import { limitsShelf, type ShelfWindow } from "../limits/limits.ts";
 import { type LimitsState, limitsStore, refreshLimits } from "../limits/model.ts";
@@ -83,7 +83,8 @@ export function LimitsShelf({ now }: { now: number }) {
 }
 
 /**
- * An account's line, its provider's colour, its name (its display name, else
+ * An account's line, its provider's icon (its colour, for a provider the page
+ * has no icon of), its name (its display name, else
  * its email, else the provider's short name), its plan and, while several
  * environments are held, the environments it is logged in on (a hub's
  * account, its hub's name); then a line per window, "Weekly · 84% · resets
@@ -106,7 +107,13 @@ function AccountRows({
   return (
     <li className="pult-limits-account" style={color}>
       <div className="pult-limits-account-top">
-        <span className="pult-limits-provider" title={providerName} aria-label={providerName} />
+        {hasUsageProviderIcon(account.driver) ? (
+          <span className="pult-limits-provider-icon" title={providerName} aria-label={providerName}>
+            <UsageProviderIcon driver={account.driver} />
+          </span>
+        ) : (
+          <span className="pult-limits-provider" title={providerName} aria-label={providerName} />
+        )}
         <span className="pult-limits-name">{account.displayName ?? account.email ?? providerName}</span>
         {account.plan === undefined ? null : <span className="pult-limits-plan">{account.plan}</span>}
         {several ? account.environments.map((environment) => <EnvironmentChip key={environment.environmentId} label={environment.label} />) : null}
