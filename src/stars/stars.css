@@ -56,3 +56,9 @@
   color: var(--muted-foreground);
   font-size: 12px;
 }
+
+/* An open fold over a sleeping Star's empty draft hides the empty state's
+   line, which would show through under the fold's last conversation. */
+.messages-timeline-row-frame:has(.pult-star-fold[data-open]) ~ [data-timeline-empty-hint] {
+  visibility: hidden;
+}

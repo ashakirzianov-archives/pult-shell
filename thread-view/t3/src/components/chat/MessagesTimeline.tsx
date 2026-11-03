@@ -1239,6 +1239,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
         <div
           className="flex h-full items-center justify-center ps-(--chat-lane-inset-start) pe-(--chat-lane-inset-end)"
           style={{ paddingBottom: emptyPlaceholderInset }}
+          data-timeline-empty-hint
         >
           <p className="text-sm text-muted-foreground">Send a message to start the conversation.</p>
         </div>
