@@ -92,6 +92,8 @@ export interface PanelRows<File extends FileRef, Thread extends ThreadRef = Shel
   readonly expanded: Readonly<Record<"ready" | Exclude<ShelfName, "pinned" | "active">, boolean>>;
   /** How many settled threads the settled shelf's tail shows. */
   readonly settledCount: number;
+  /** Whether the Settled shelf shows at all (`pult.panel.settled`); hidden, none of its rows is reached, not even the selected one. */
+  readonly settledShown: boolean;
 }
 
 /**
@@ -99,8 +101,9 @@ export interface PanelRows<File extends FileRef, Thread extends ThreadRef = Shel
  * them (`PanelView.tsx`), as upstream's sidebar jumps reach its visible
  * rows: the Explorer shelf's open files, its environments' rows left out,
  * then the cards, Ready's drafts and threads, and the Working, Snoozed and
- * Settled shelves'; a collapsed list reaches its selected row alone. The
- * Limits shelf's rows, last, are none: they select nothing.
+ * Settled shelves'; a collapsed list reaches its selected row alone, a
+ * hidden Settled shelf none. The Limits shelf's rows, last, are none: they
+ * select nothing.
  */
 export function jumpTargets<File extends FileRef, Thread extends ThreadRef>(panel: PanelRows<File, Thread>): JumpTarget<File, Thread>[] {
   const isHighlighted = (entry: ExplorerEntry<File>) => entry.key === panel.explorer.highlighted;
@@ -120,6 +123,8 @@ export function jumpTargets<File extends FileRef, Thread extends ThreadRef>(pane
     ...shown(ready, panel.expanded.ready, isSelected),
     ...shown(on("working").map(threadTarget), panel.expanded.working, isSelected),
     ...shown(on("snoozed").map(threadTarget), panel.expanded.snoozed, isSelected),
-    ...shown(settledTail(on("settled"), panel.settledCount, panel.selection).map(threadTarget), panel.expanded.settled, isSelected),
+    ...(panel.settledShown
+      ? shown(settledTail(on("settled"), panel.settledCount, panel.selection).map(threadTarget), panel.expanded.settled, isSelected)
+      : []),
   ];
 }

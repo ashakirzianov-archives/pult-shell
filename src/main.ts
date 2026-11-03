@@ -33,6 +33,7 @@ import { gateEditorMenus } from "./editorMenus.ts";
 import { registerPultFiles } from "./files/index.ts";
 import { registerLimits } from "./limits/index.ts";
 import { startPanelRows } from "./panel/rows.tsx";
+import { registerPanelSettings, startPanelSettings } from "./panel/settings.ts";
 import { registerPanel } from "./panel/view.tsx";
 import { registerColorSchemeCommand } from "./settings/colorScheme.ts";
 import { registerSettingsPane } from "./settings/pane.tsx";
@@ -70,6 +71,7 @@ registerThreadPane();
 registerSettingsPane();
 registerColorSchemeCommand();
 registerMode();
+registerPanelSettings();
 gateEditorMenus();
 registerStatusCommands();
 registerComposerCommands();
@@ -121,6 +123,7 @@ await initialize(workbenchServices(), container, options, {
 
 await syncColorScheme();
 await startMode();
+await startPanelSettings();
 await startStatusBar();
 await startComposerStrip();
 await startPanelRows();

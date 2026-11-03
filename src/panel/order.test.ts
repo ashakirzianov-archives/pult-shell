@@ -21,6 +21,7 @@ function panel(overrides: Partial<PanelRows<ReturnType<typeof file>, ReturnType<
     selection: undefined,
     expanded: EXPANDED,
     settledCount: 10,
+    settledShown: true,
     ...overrides,
   };
 }
@@ -54,6 +55,12 @@ describe("jumpTargets", () => {
     const files = [file("env", "/a.ts"), file("env", "/b.ts")];
     assert.deepEqual(keys(jumpTargets(panel({ explorer: { files, highlighted: "pult://env/b.ts", expanded: false }, expanded: COLLAPSED }))), ["pult://env/b.ts"]);
     assert.deepEqual(keys(jumpTargets(panel({ explorer: { files, highlighted: "environment:env", expanded: false }, expanded: COLLAPSED }))), []);
+  });
+
+  test("reaches no settled thread while the Settled shelf is hidden, not even the selected one", () => {
+    const threads = [thread("active", "active"), thread("old", "settled")];
+    assert.deepEqual(keys(jumpTargets(panel({ threads, settledShown: false, selection: "env/old" }))), ["env/active"]);
+    assert.deepEqual(keys(jumpTargets(panel({ threads, settledShown: false, expanded: COLLAPSED, selection: "env/old" }))), []);
   });
 
   test("reaches the settled tail's shown threads, and the selected one beyond it", () => {

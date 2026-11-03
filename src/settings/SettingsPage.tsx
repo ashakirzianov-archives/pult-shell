@@ -6,6 +6,7 @@ import { useRef, useSyncExternalStore } from "react";
 import { connection, environmentName, type ShellEnvironment } from "../connection/index.ts";
 import { setUsageLimitsMode, USAGE_LIMITS_MODES, usageLimitsMode } from "../limits/index.ts";
 import { type modeChoice, MODES, setMode } from "../mode.ts";
+import { SETTLED_CHOICES, setSettledShelf, settledShelf } from "../panel/settings.ts";
 import { COLOR_SCHEMES, type colorSchemeChoice, setColorScheme } from "./colorScheme.ts";
 
 function run(command: string, ...args: unknown[]): void {
@@ -112,63 +113,45 @@ function AppearanceSection({ colorScheme }: { colorScheme: ColorSchemeChoice }) 
   return (
     <section className="pult-settings-section">
       <h2>Appearance</h2>
-      <div className="pult-settings-row">
-        <div className="pult-settings-row-text">
-          <div className="pult-settings-row-label">Colour scheme</div>
-          <div className="pult-settings-row-description">
-            Light and Dark use VS Code's preferred light and dark themes; System follows the operating system.
-          </div>
-        </div>
-        <div className="pult-settings-segments" role="group" aria-label="Colour scheme">
-          {COLOR_SCHEMES.map(({ scheme, label }) => (
-            <button
-              key={scheme}
-              type="button"
-              className="pult-settings-segment"
-              aria-pressed={scheme === current}
-              onClick={() => void setColorScheme(scheme)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      </div>
+      <SegmentedRow
+        label="Colour scheme"
+        description="Light and Dark use VS Code's preferred light and dark themes; System follows the operating system."
+        choices={COLOR_SCHEMES.map(({ scheme, label }) => ({ value: scheme, label }))}
+        current={current}
+        onChoose={(scheme) => void setColorScheme(scheme)}
+      />
     </section>
   );
 }
 
 /**
- * The left panel's shelves: when the Limits shelf shows the usage limits,
- * When warning, Always or Hidden (`pult.panel.usageLimits`, `src/limits/`),
- * one button each, the current one pressed; the palette's Pult: Usage Limits
- * Shelf… and the shelf header's right-click are the same setting.
+ * The left panel's shelves, a row each, one button per choice, the current
+ * one pressed: when the Limits shelf shows the usage limits, When warning,
+ * Always or Hidden (`pult.panel.usageLimits`, `src/limits/`), which the
+ * palette's Pult: Usage Limits Shelf… and the shelf header's right-click set
+ * too; and whether the Settled shelf shows (`src/panel/settings.ts`), which
+ * the palette's Show Settled Shelf and Hide Settled Shelf set too.
  */
 function PanelSection() {
   const usageLimits = useSyncExternalStore(usageLimitsMode.subscribe, usageLimitsMode.get);
+  const settled = useSyncExternalStore(settledShelf.subscribe, settledShelf.get);
   return (
     <section className="pult-settings-section">
       <h2>Panel</h2>
-      <div className="pult-settings-row">
-        <div className="pult-settings-row-text">
-          <div className="pult-settings-row-label">Usage limits</div>
-          <div className="pult-settings-row-description">
-            The providers' usage limits in the Limits shelf: by default only those past 95% or on a pace that runs out before the reset.
-          </div>
-        </div>
-        <div className="pult-settings-segments" role="group" aria-label="Usage limits">
-          {USAGE_LIMITS_MODES.map(({ mode: choice, label }) => (
-            <button
-              key={choice}
-              type="button"
-              className="pult-settings-segment"
-              aria-pressed={choice === usageLimits}
-              onClick={() => void setUsageLimitsMode(choice)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      </div>
+      <SegmentedRow
+        label="Usage limits"
+        description="The providers' usage limits in the Limits shelf: by default only those past 95% or on a pace that runs out before the reset."
+        choices={USAGE_LIMITS_MODES.map(({ mode: choice, label }) => ({ value: choice, label }))}
+        current={usageLimits}
+        onChoose={(choice) => void setUsageLimitsMode(choice)}
+      />
+      <SegmentedRow
+        label="Settled threads"
+        description="Hidden, the Pult tab shows no Settled shelf; Pult: Open Thread… still reaches settled threads."
+        choices={SETTLED_CHOICES}
+        current={settled}
+        onChoose={(choice) => void setSettledShelf(choice)}
+      />
     </section>
   );
 }
@@ -185,28 +168,51 @@ function ModeSection({ mode }: { mode: ModeChoice }) {
   return (
     <section className="pult-settings-section">
       <h2>Mode</h2>
-      <div className="pult-settings-row">
-        <div className="pult-settings-row-text">
-          <div className="pult-settings-row-label">Layout</div>
-          <div className="pult-settings-row-description">
-            Pult's own layout hides and rearranges much of VS Code; VS Code mode shows it all, for an extension that needs it.
-          </div>
-        </div>
-        <div className="pult-settings-segments" role="group" aria-label="Layout">
-          {MODES.map(({ mode: choice, label }) => (
-            <button
-              key={choice}
-              type="button"
-              className="pult-settings-segment"
-              aria-pressed={choice === current}
-              onClick={() => void setMode(choice)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      </div>
+      <SegmentedRow
+        label="Layout"
+        description="Pult's own layout hides and rearranges much of VS Code; VS Code mode shows it all, for an extension that needs it."
+        choices={MODES.map(({ mode: choice, label }) => ({ value: choice, label }))}
+        current={current}
+        onChoose={(choice) => void setMode(choice)}
+      />
     </section>
+  );
+}
+
+/** A setting's row of one button per choice, the current one pressed. */
+function SegmentedRow<Value extends string>({
+  label,
+  description,
+  choices,
+  current,
+  onChoose,
+}: {
+  label: string;
+  description: string;
+  choices: ReadonlyArray<{ readonly value: Value; readonly label: string }>;
+  current: Value;
+  onChoose: (value: Value) => void;
+}) {
+  return (
+    <div className="pult-settings-row">
+      <div className="pult-settings-row-text">
+        <div className="pult-settings-row-label">{label}</div>
+        <div className="pult-settings-row-description">{description}</div>
+      </div>
+      <div className="pult-settings-segments" role="group" aria-label={label}>
+        {choices.map((choice) => (
+          <button
+            key={choice.value}
+            type="button"
+            className="pult-settings-segment"
+            aria-pressed={choice.value === current}
+            onClick={() => onChoose(choice.value)}
+          >
+            {choice.label}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 
