@@ -13,6 +13,9 @@ export const draftKey = (draft: Pick<ProjectDraft, "environmentId" | "projectId"
 
 export const environmentKey = (environmentId: string) => `environment:${environmentId}`;
 
+/** A Star's card's key, beside the threads' in the selection's snapshot. */
+export const starKey = (starId: string) => `star:${starId}`;
+
 /** What the panel's order needs of a thread. */
 type ThreadRef = Pick<ShellThread, "environmentId" | "id" | "shelf">;
 
@@ -73,14 +76,17 @@ export function settledTail<Thread extends ThreadRef>(threads: ReadonlyArray<Thr
   return visible;
 }
 
-/** A row of the left panel that Cmd+1 to Cmd+9 reach: an open file of the Explorer shelf, a draft card or a thread card. */
+/** A row of the left panel that Cmd+1 to Cmd+9 reach: a Star's card, an open file of the Explorer shelf, a draft card or a thread card. */
 export type JumpTarget<File extends FileRef, Thread extends ThreadRef = ShellThread> =
+  | { readonly kind: "star"; readonly key: string; readonly starId: string }
   | { readonly kind: "file"; readonly key: string; readonly file: File }
   | { readonly kind: "draft"; readonly key: string; readonly draft: ProjectDraft }
   | { readonly kind: "thread"; readonly key: string; readonly thread: Thread };
 
 /** What the panel shows, as `jumpTargets` reads it. */
 export interface PanelRows<File extends FileRef, Thread extends ThreadRef = ShellThread> {
+  /** The Stars' cards, first, by their Stars' ids; none while Show Star is off. */
+  readonly stars: ReadonlyArray<string>;
   readonly environmentIds: ReadonlyArray<string>;
   readonly explorer: {
     readonly files: ReadonlyArray<File>;
@@ -104,17 +110,21 @@ export interface PanelRows<File extends FileRef, Thread extends ThreadRef = Shel
 /**
  * The panel's rows Cmd+1 to Cmd+9 reach, top to bottom as the panel shows
  * them (`PanelView.tsx`), as upstream's sidebar jumps reach its visible
- * rows: the Explorer shelf's open files, its environments' rows left out,
- * then the cards, Ready's drafts and threads, and the Working, Snoozed and
- * Settled shelves'; a collapsed list reaches its selected row alone, a
- * hidden Settled shelf none. The Limits shelf's rows, last, are none: they
- * select nothing.
+ * rows: the Stars' cards first, then the Explorer shelf's open files, its
+ * environments' rows left out, then the cards, Ready's drafts and threads,
+ * and the Working, Snoozed and Settled shelves'; a collapsed list reaches
+ * its selected row alone, a hidden Settled shelf none. The Limits shelf's
+ * rows, last, are none: they select nothing.
  */
 export function jumpTargets<File extends FileRef, Thread extends ThreadRef>(panel: PanelRows<File, Thread>): JumpTarget<File, Thread>[] {
   const isHighlighted = (entry: ExplorerEntry<File>) => entry.key === panel.explorer.highlighted;
-  const files = shown(explorerEntries(panel.environmentIds, panel.explorer.files), panel.explorer.expanded, isHighlighted).flatMap(
-    (entry): JumpTarget<File, Thread>[] => (entry.kind === "file" ? [{ kind: "file", key: entry.key, file: entry.file }] : []),
-  );
+  const stars = panel.stars.map((starId): JumpTarget<File, Thread> => ({ kind: "star", key: starKey(starId), starId }));
+  const files = [
+    ...stars,
+    ...shown(explorerEntries(panel.environmentIds, panel.explorer.files), panel.explorer.expanded, isHighlighted).flatMap(
+      (entry): JumpTarget<File, Thread>[] => (entry.kind === "file" ? [{ kind: "file", key: entry.key, file: entry.file }] : []),
+    ),
+  ];
   if (panel.environmentIds.length === 0) return files;
   const on = (...shelves: ReadonlyArray<ShelfName>) => panel.threads.filter((thread) => thread.shelf !== null && shelves.includes(thread.shelf));
   const threadTarget = (thread: Thread): JumpTarget<File, Thread> => ({ kind: "thread", key: keyOf(thread), thread });

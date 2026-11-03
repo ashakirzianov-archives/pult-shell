@@ -1,6 +1,9 @@
 import { getService, ICommandService } from "@codingame/monaco-vscode-api";
 import { useEffect, useState, useSyncExternalStore } from "react";
 
+import { starStore } from "../stars/model.ts";
+import { starEnabled } from "../stars/settings.ts";
+import type { Star } from "../stars/stars.ts";
 import { retrySettledThreads, showSettledThreads } from "../threads/model.ts";
 import { settleThread, showSnoozeMenu, showThreadMenu, unsettleThread, wakeThread } from "../threads/park.ts";
 import { parkActions } from "../threads/parking.ts";
@@ -22,8 +25,9 @@ import { ExplorerShelf } from "./ExplorerShelf.tsx";
 import { EXPANDED_KEYS, selectionSnapshot, showingSettled } from "./jump.ts";
 import { JumpHint } from "./JumpHint.tsx";
 import { LimitsShelf } from "./LimitsShelf.tsx";
-import { draftCards as draftCardsOf, draftKey, keyOf, SETTLED_TAIL_INITIAL_COUNT, SETTLED_TAIL_PAGE_COUNT, settledTail } from "./order.ts";
+import { draftCards as draftCardsOf, draftKey, keyOf, SETTLED_TAIL_INITIAL_COUNT, SETTLED_TAIL_PAGE_COUNT, settledTail, starKey } from "./order.ts";
 import { settledShelf } from "./settings.ts";
+import { StarCard } from "./StarCard.tsx";
 
 function run(command: string, ...args: unknown[]): void {
   void getService(ICommandService).then((commands) => commands.executeCommand(command, ...args));
@@ -34,7 +38,7 @@ const subscribeToThreads = (listener: () => void) => threadStore.subscribe(liste
 const threadsSnapshot = () => threadStore.get();
 
 /** What a thread is doing, as its status reads: Working, Waiting on background work, or neither. */
-type Activity = "working" | "waiting" | null;
+export type Activity = "working" | "waiting" | null;
 
 /**
  * Each thread's activity, by its key: Waiting when upstream parks it on
@@ -87,7 +91,9 @@ function subagentsByRoot(threads: ReadonlyArray<ShellThread>, activities: Map<st
  * header, Settled left out while `pult.panel.settled` hides it (`settings.ts`). While the page holds several environments, each card names its
  * own. The selected card expands with its details and its subagents; a
  * subagent has no card, so while one is selected its root's card is the
- * expanded one. The Explorer shelf comes first (`ExplorerShelf.tsx`), and
+ * expanded one. The Stars' cards come first, under no header, while Show
+ * Star is on (`StarCard.tsx`, `src/stars/`); a Star's threads have no card
+ * of their own. The Explorer shelf comes next (`ExplorerShelf.tsx`), and
  * Ready's first cards are the projects' drafts of new threads that hold
  * something (`drafts.ts`), newest first, and the selected draft. Cmd+1 to
  * Cmd+9 jump to its rows in this order (`order.ts`, `jump.ts`). The Limits
@@ -131,6 +137,24 @@ export function PanelView() {
     />
   );
   const selectedDraftCard = draftCards.find(isSelectedDraft);
+  const stars = useSyncExternalStore(starStore.subscribe, starStore.get);
+  const starsShown = useSyncExternalStore(starEnabled.subscribe, starEnabled.get);
+  // A Star's card stands for its conversation: selected with the Star, or with one of its conversation's subagents.
+  const starCard = (star: Star) => {
+    const conversation = star.current === null ? undefined : keyOf(star.current);
+    return (
+      <StarCard
+        key={starKey(star.id)}
+        star={star}
+        environment={chip(star.current?.environmentId ?? star.homes[0]?.environmentId ?? "")}
+        subagents={conversation === undefined ? [] : (subagents.get(conversation) ?? [])}
+        activities={activities}
+        selected={selection === starKey(star.id) || (conversation !== undefined && selectedCard === conversation)}
+        selection={selection}
+        now={now}
+      />
+    );
+  };
   const card = (thread: ShellThread) => (
     <ThreadCard
       key={keyOf(thread)}
@@ -147,6 +171,7 @@ export function PanelView() {
   return (
     <div className="pult-panel">
       <ul className="pult-panel-cards">
+        {starsShown ? stars.map(starCard) : null}
         <ExplorerShelf environments={state.environments} />
         {state.environments.length === 0 ? (
           <li className="pult-panel-empty">
@@ -372,7 +397,7 @@ function ThreadCard({
  * its title, then its status, a working one's being its elapsed time alone.
  * Active ones first; the selected one shown even while collapsed.
  */
-function Subagents({
+export function Subagents({
   subagents,
   activities,
   selection,
@@ -531,7 +556,7 @@ function Status({ thread, activity, now }: { thread: ShellThread; activity: Acti
 }
 
 /** The time since `iso`, in T3 Code's short form: `now`, `5m`, `3h`, `2d`. */
-function age(iso: string, now: number): string {
+export function age(iso: string, now: number): string {
   const minutes = Math.floor((now - Date.parse(iso)) / 60_000);
   if (Number.isNaN(minutes)) return "";
   if (minutes < 1) return "now";
@@ -545,7 +570,7 @@ function age(iso: string, now: number): string {
  * The time since `since`, ticking each second, in upstream's subagent form:
  * `45s`, `3m 05s`, `1h 02m`. Its own clock, so a tick re-renders only it.
  */
-function Elapsed({ since }: { since: string }) {
+export function Elapsed({ since }: { since: string }) {
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1_000);

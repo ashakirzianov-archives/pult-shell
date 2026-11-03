@@ -14,6 +14,7 @@ const COLLAPSED = { ready: false, working: false, snoozed: false, settled: false
 
 function panel(overrides: Partial<PanelRows<ReturnType<typeof file>, ReturnType<typeof thread>>> = {}) {
   return {
+    stars: [],
     environmentIds: ["env"],
     explorer: { files: [], highlighted: undefined, expanded: true },
     drafts: [],
@@ -46,6 +47,19 @@ describe("jumpTargets", () => {
       }),
     );
     assert.deepEqual(keys(targets), ["pult://env/a.ts", "pult://other/b.ts", "draft:env/project", "env/pinned", "env/active", "env/working", "env/snoozed", "env/settled"]);
+  });
+
+  test("reaches the Stars' cards first, above the Explorer's files, whatever the shelves", () => {
+    const targets = jumpTargets(
+      panel({
+        stars: ["one"],
+        explorer: { files: [file("env", "/a.ts")], highlighted: undefined, expanded: true },
+        threads: [thread("active", "active")],
+        expanded: COLLAPSED,
+        selection: "env/active",
+      }),
+    );
+    assert.deepEqual(keys(targets), ["star:one", "pult://env/a.ts", "env/active"]);
   });
 
   test("reaches a collapsed list's selected row alone", () => {

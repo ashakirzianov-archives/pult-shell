@@ -4,13 +4,17 @@ import type { URI } from "@codingame/monaco-vscode-api/vscode/vs/base/common/uri
 import { Action2, registerAction2 } from "@codingame/monaco-vscode-api/vscode/vs/platform/actions/common/actions";
 import { LifecyclePhase } from "@codingame/monaco-vscode-api/vscode/vs/workbench/services/lifecycle/common/lifecycle";
 
+import { starStore } from "../stars/model.ts";
+import { starEnabled } from "../stars/settings.ts";
 import {
   explorerSelected,
   onDidSelectThread,
   openExplorerFiles,
   selectDraft,
   selectedDraft,
+  selectedStar,
   selectedThread,
+  selectStar,
   selectThread,
   showExplorerFile,
 } from "../threads/selection.ts";
@@ -18,12 +22,14 @@ import { isSubagent, scopedKey, threadStore } from "../threads/store.ts";
 import { storedExpanded } from "./collapsible.tsx";
 import { isStarDraft, projectDrafts } from "./drafts.ts";
 import { exploredEnvironment } from "./explorer.ts";
-import { draftCards, draftKey, environmentKey, jumpTargets, type JumpTarget, SETTLED_TAIL_INITIAL_COUNT } from "./order.ts";
+import { draftCards, draftKey, environmentKey, jumpTargets, type JumpTarget, SETTLED_TAIL_INITIAL_COUNT, starKey } from "./order.ts";
 import { settledShelf } from "./settings.ts";
 
-/** What the editor part shows, as a stable snapshot: a thread's key, a project's draft's (`draftKey`), `explorer` for the Explorer workspace, or nothing. */
+/** What the editor part shows, as a stable snapshot: a thread's key, a project's draft's (`draftKey`), a Star's (`starKey`), `explorer` for the Explorer workspace, or nothing. */
 export function selectionSnapshot(): string | undefined {
   if (explorerSelected()) return "explorer";
+  const star = selectedStar();
+  if (star !== undefined) return starKey(star);
   const draft = selectedDraft();
   if (draft !== undefined) return draftKey(draft);
   const thread = selectedThread();
@@ -68,6 +74,7 @@ function currentTargets(): JumpTarget<URI>[] {
   const { environments, threads } = threadStore.get();
   const environmentIds = environments.map((environment) => environment.id);
   return jumpTargets({
+    stars: starEnabled.get() ? starStore.get().map((star) => star.id) : [],
     environmentIds,
     explorer: { files: openExplorerFiles.get().files, highlighted: explorerHighlight(), expanded: storedExpanded(EXPANDED_KEYS.explorer, true) },
     drafts: draftCards(projectDrafts.get(), selectedDraft(), new Set(environmentIds), isStarDraft),
@@ -164,12 +171,16 @@ function followJumpKeys(): void {
   onDidSelectThread(refreshHints);
   openExplorerFiles.subscribe(refreshHints);
   settledShelf.subscribe(refreshHints);
+  starStore.subscribe(refreshHints);
+  starEnabled.subscribe(refreshHints);
 }
 
 function jump(target: JumpTarget<URI> | undefined): Promise<void> {
   switch (target?.kind) {
     case undefined:
       return Promise.resolve();
+    case "star":
+      return selectStar(target.starId);
     case "file":
       return showExplorerFile(target.file);
     case "draft":
@@ -181,7 +192,7 @@ function jump(target: JumpTarget<URI> | undefined): Promise<void> {
 
 /**
  * Cmd+1 to Cmd+9 (Ctrl off the Mac), upstream's thread jumps: the left
- * panel's Nth row (`jumpTargets`), an Explorer file, a draft or a thread,
+ * panel's Nth row (`jumpTargets`), a Star, an Explorer file, a draft or a thread,
  * whether or not the panel shows (`followJumpKeys`). Each is a command too,
  * `pult-shell.jump.1` to `.9`, for another binding; not in the palette,
  * where Pult: Open Thread… is. Registered before the workbench starts.

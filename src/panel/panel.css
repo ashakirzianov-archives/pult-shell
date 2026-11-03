@@ -271,6 +271,47 @@
   color: var(--vscode-descriptionForeground);
 }
 
+/* A Star's card (StarCard.tsx): one row, its mark, its name in a title's weight, its chip and its state. */
+.pult-star-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 22px;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.pult-star-mark {
+  flex: none;
+  width: 22px;
+  height: 22px;
+}
+
+.pult-star-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--vscode-foreground);
+}
+
+.pult-star-row:has(.pult-card-environment) .pult-star-name {
+  flex: 0 1 auto;
+}
+
+.pult-star-awake {
+  color: var(--vscode-foreground);
+  font-weight: 500;
+}
+
+.pult-star-asleep {
+  opacity: 0.75;
+}
+
 .pult-card-details {
   padding: 0 10px 8px;
 }
