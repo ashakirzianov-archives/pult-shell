@@ -12,7 +12,7 @@ import { URI } from "@codingame/monaco-vscode-api/vscode/vs/base/common/uri";
 import { type ReactNode, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
-import type { MountedView, ThreadViewMounts } from "../../thread-view/shell/main.tsx";
+import type { MountedView, MountOptions, ThreadViewMounts } from "../../thread-view/shell/main.tsx";
 
 import { connection } from "../connection/index.ts";
 import { allowNativeScroll } from "../nativeScroll.ts";
@@ -110,23 +110,24 @@ export function draftCreates(draft: { readonly environmentId: string; readonly p
  * The thread's turns and composer, or the project's draft, while the page
  * holds its environment. Mounted again when the page takes up or lets go of
  * that environment, or `generation` changes, and not when only `target`
- * does, which is a draft's promotion: the view mounted for the draft is the
- * new thread's already. A thread's place (`ThreadBarEntries`) joins the
- * view's composer bar, or what `barEntries` renders there; `timelineHeader`
- * is an element of the caller's at the top of the view's timeline, inside
- * its scroller (a Star's fold, `src/stars/tab.tsx`).
+ * does, which is a draft's promotion: the view mounted for the draft becomes
+ * the new thread's, at once if it has not gone there itself yet
+ * (`MountedView.follow`). A thread's place (`ThreadBarEntries`) joins the
+ * view's composer bar, or what `barEntries` renders there; `options` are the
+ * caller's additions to the view, read as it mounts (a Star's fold, its
+ * placeholder, its draft without upstream's hero, `src/stars/tab.tsx`).
  */
 export function ThreadContent({
   target,
   generation,
   onPromoted,
-  timelineHeader,
+  options,
   barEntries,
 }: {
   target: PaneTarget;
   generation: number;
   onPromoted: (environmentId: string, threadId: string) => void;
-  timelineHeader?: HTMLElement;
+  options?: MountOptions;
   barEntries?: (bar: HTMLElement) => ReactNode;
 }) {
   const environmentId = useSyncExternalStore(
@@ -136,8 +137,9 @@ export function ThreadContent({
   const element = useRef<HTMLDivElement>(null);
   const [failure, setFailure] = useState<string>();
   const [bar, setBar] = useState<HTMLElement>();
-  const latest = useRef({ target, onPromoted, timelineHeader });
-  latest.current = { target, onPromoted, timelineHeader };
+  const latest = useRef({ target, onPromoted, options });
+  latest.current = { target, onPromoted, options };
+  const mounted = useRef<MountedView>(undefined);
   useEffect(() => {
     const host = element.current;
     if (environmentId === undefined || host === null) return;
@@ -147,7 +149,7 @@ export function ThreadContent({
       (mounts) => {
         if (disposed) return;
         const shown = latest.current.target;
-        const options = latest.current.timelineHeader === undefined ? {} : { timelineHeader: latest.current.timelineHeader };
+        const options = latest.current.options ?? {};
         view =
           shown.kind === "thread"
             ? mounts.mount(host, environmentId, shown.threadId, options)
@@ -158,6 +160,7 @@ export function ThreadContent({
                 (promotedIn, threadId) => latest.current.onPromoted(promotedIn, threadId),
                 options,
               );
+        mounted.current = view;
         setBar(view.bar);
       },
       (error: unknown) => {
@@ -169,10 +172,16 @@ export function ThreadContent({
       disposed = true;
       setBar(undefined);
       // The view is a React root of its own, which cannot unmount while this one renders.
-      const mounted = view;
-      if (mounted !== undefined) queueMicrotask(() => mounted.dispose());
+      const shown = view;
+      if (mounted.current === shown) mounted.current = undefined;
+      if (shown !== undefined) queueMicrotask(() => shown.dispose());
     };
   }, [environmentId, generation]);
+  // The thread a draft's view became, which the caller may learn of before the view goes there.
+  const promotedTo = target.kind === "thread" ? target.threadId : undefined;
+  useEffect(() => {
+    if (environmentId !== undefined && promotedTo !== undefined) mounted.current?.follow(environmentId, promotedTo);
+  }, [environmentId, promotedTo]);
   if (environmentId === undefined) {
     return <div className="pult-thread-empty">Not connected to this thread's environment. Run “Pult: Connect to Environment”.</div>;
   }

@@ -7,7 +7,7 @@ import { BarTip } from "../threads/barEntries.tsx";
 import { draftCreates, type PaneTarget, ThreadContent } from "../threads/pane.tsx";
 import { threadStore } from "../threads/store.ts";
 import { starById, starStore, type StarTarget, starTarget } from "./model.ts";
-import { earlierConversations } from "./stars.ts";
+import { earlierConversations, starName } from "./stars.ts";
 import "./stars.css";
 
 const subscribeToConnection = (listener: () => void) => connection.onDidChange(listener);
@@ -18,14 +18,33 @@ const threadsSnapshot = () => threadStore.get();
 const sameTarget = (left: StarTarget | undefined, right: StarTarget | undefined) => JSON.stringify(left) === JSON.stringify(right);
 
 /**
+ * How the Star's composer reads, in its tab and in the composer strip under
+ * its files: asleep, its draft rests where a thread's composer sits, under
+ * the fold, without upstream's hero, which asks what to build in a project
+ * and offers to start without one; awake or asleep, it addresses the Star,
+ * "Message Star", or its name once it has one.
+ */
+export function starComposerOptions(starId: string) {
+  return {
+    draftHero: false,
+    placeholder: {
+      get: () => `Message ${starName(starById(starId) ?? { name: "" })}`,
+      subscribe: starStore.subscribe,
+    },
+  };
+}
+
+/**
  * The Star's tab: one scroller, the fold of its earlier conversations at the
  * top of the timeline, then its current conversation's view, mounted as the
  * thread pane mounts a thread on its environment, or while the Star sleeps
  * its project's draft (`new-thread-draft`'s), in the home it wakes in
  * (`starTarget`). Writing to the draft wakes the Star: the view stays
- * mounted as the thread it creates, which becomes the current
- * conversation. Any other change of what the Star shows (it falls asleep,
- * another page woke it) mounts the view again on it.
+ * mounted as the thread it creates, which becomes the current conversation,
+ * whether the view or the store names the thread first; told by the store,
+ * the view goes to the thread at once (`ThreadContent`, `MountedView.follow`)
+ * rather than wait to go there itself. Any other change of what the Star
+ * shows (it falls asleep, another page woke it) mounts the view again on it.
  */
 export function StarContent({ starId }: { starId: string }) {
   const star = useSyncExternalStore(starStore.subscribe, () => starById(starId));
@@ -33,6 +52,7 @@ export function StarContent({ starId }: { starId: string }) {
   useSyncExternalStore(subscribeToConnection, environmentsSnapshot);
   const target = star === undefined ? undefined : starTarget(star);
   const [header] = useState(() => document.createElement("div"));
+  const [options] = useState(() => ({ ...starComposerOptions(starId), timelineHeader: header }));
   // The view's mount: a new generation for a new target, but for the thread the draft became, which the view shows already.
   const mount = useRef<{ target: StarTarget | undefined; generation: number; promoted?: { environmentId: string; threadId: string } }>({
     target: undefined,
@@ -60,7 +80,7 @@ export function StarContent({ starId }: { starId: string }) {
         onPromoted={(environmentId, threadId) => {
           mount.current.promoted = { environmentId, threadId };
         }}
-        timelineHeader={header}
+        options={options}
         barEntries={(bar) => <StarBarEntries bar={bar} target={target} />}
       />
       {createPortal(<EarlierConversations count={earlierConversations(star)} />, header)}

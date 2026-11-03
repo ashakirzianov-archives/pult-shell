@@ -45,7 +45,7 @@ export interface ThreadViewMounts {
     options?: MountOptions,
   ): MountedView;
   /** The composer alone of a thread or a project's draft, for the strip under a file. */
-  mountComposer(element: HTMLElement, target: ViewTarget): MountedView;
+  mountComposer(element: HTMLElement, target: ViewTarget, options?: MountOptions): MountedView;
   /**
    * Whether the server thread `threadId` on `environmentId` is the one the
    * project's draft on `draftEnvironmentId` creates, before the view mounted

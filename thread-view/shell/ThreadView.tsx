@@ -19,6 +19,7 @@ import { BackgroundThreadContext } from "../t3/src/components/chat/backgroundThr
 import { ComposerControlsSlot } from "../t3/src/components/chat/ComposerFooterControls";
 import { ConfirmDialogHost } from "../t3/src/components/ConfirmDialogHost";
 import { CustomSnoozeDialogHost } from "../t3/src/components/CustomSnoozeDialog";
+import { ShellComposerOptions, type ShellValue } from "../t3/src/components/chat/ShellComposerOptions";
 import { TimelineHeaderSlot } from "../t3/src/components/chat/TimelineHeaderSlot";
 import { SidebarProvider } from "../t3/src/components/ui/sidebar";
 import { AnchoredToastProvider, ToastProvider, toastManager } from "../t3/src/components/ui/toast";
@@ -272,11 +273,26 @@ function makeLanding(mount: Mount) {
 export interface MountedView {
   dispose(): void;
   readonly bar: HTMLElement;
+  /**
+   * The draft the view shows became `threadId` on `environmentId`'s server,
+   * as the shell learned before the view went there itself: the view goes
+   * to the thread now, as upstream's promotion goes, its composer kept, and
+   * names it to `onPromoted`. Nothing for a view on a thread already.
+   */
+  follow(environmentId: string, threadId: string): void;
 }
 
-/** What the shell adds to a pane's view: an element of its own at the timeline's top, inside its scroller (a Star's fold). */
+/**
+ * What the shell adds to a pane's view, or changes of it: an element of its
+ * own at the timeline's top, inside its scroller (a Star's fold); a draft
+ * resting with its composer where a thread's sits, without upstream's hero
+ * (`draftHero: false`); and the composer's placeholder, live, in place of
+ * upstream's (a Star's, which names it).
+ */
 export interface MountOptions {
   readonly timelineHeader?: HTMLElement;
+  readonly draftHero?: boolean;
+  readonly placeholder?: ShellValue<string>;
 }
 
 /**
@@ -307,19 +323,28 @@ function mountView(
   bar.className = "pult-composer-bar";
   element.append(main, bar);
   const root = createRoot(main);
+  const composerOptions = { draftHero: options.draftHero ?? true, placeholder: options.placeholder ?? null };
   root.render(
     <StrictMode>
       <AppAtomRegistryProvider>
         <ComposerControlsSlot value={bar}>
-          <TimelineHeaderSlot value={options.timelineHeader ?? null}>
-            <RouterProvider router={router} />
-          </TimelineHeaderSlot>
+          <ShellComposerOptions value={composerOptions}>
+            <TimelineHeaderSlot value={options.timelineHeader ?? null}>
+              <RouterProvider router={router} />
+            </TimelineHeaderSlot>
+          </ShellComposerOptions>
         </ComposerControlsSlot>
       </AppAtomRegistryProvider>
     </StrictMode>,
   );
+  const navigable: AnyRouter = router;
   return {
     bar,
+    follow: (environmentId, threadId) => {
+      if (mount.target().kind !== "draft") return;
+      mount.promote(environmentId, threadId);
+      void navigable.navigate({ to: mount.home(), replace: true });
+    },
     dispose: () => {
       root.unmount();
       main.remove();
@@ -362,8 +387,8 @@ export function mountDraftView(
  * shortcuts and paste to the pane's. A draft's promotion is the pane's to
  * tell the shell.
  */
-export function mountComposerView(element: HTMLElement, target: ViewTarget): MountedView {
-  return mountView(element, target, () => {}, true);
+export function mountComposerView(element: HTMLElement, target: ViewTarget, options: MountOptions = {}): MountedView {
+  return mountView(element, target, () => {}, true, options);
 }
 
 export type { ViewTarget };

@@ -12,7 +12,8 @@ import { allowNativeTextMenu } from "../nativeTextMenu.ts";
 import { BarTip } from "../threads/barEntries.tsx";
 import { isShellTab, threadView } from "../threads/pane.tsx";
 import { starStore } from "../stars/model.ts";
-import { isSwitchingThread, onDidSelectThread, selectionTarget } from "../threads/selection.ts";
+import { starComposerOptions } from "../stars/tab.tsx";
+import { isSwitchingThread, onDidSelectThread, selectedStar, selectionTarget } from "../threads/selection.ts";
 import "./composer.css";
 
 const SHOW_COMPOSER = "pult-shell.showComposer";
@@ -89,6 +90,12 @@ export function selectedTarget(): ViewTarget | null {
   return "threadId" in target
     ? { kind: "thread", environmentId, threadId: target.threadId }
     : { kind: "draft", environmentId, projectId: target.projectId };
+}
+
+/** The selected Star's composer as its tab has it (`starComposerOptions`), or upstream's for any other selection. */
+function selectedStarComposer() {
+  const starId = selectedStar();
+  return starId === undefined ? {} : starComposerOptions(starId);
 }
 
 const sameTarget = (left: ViewTarget | null, right: ViewTarget | null) => JSON.stringify(left) === JSON.stringify(right);
@@ -181,10 +188,11 @@ export async function startComposerStrip(): Promise<void> {
     void threadView().then(
       (mounts) => {
         if (current.disposed) return;
-        const view = mounts.mountComposer(host, target);
+        const view = mounts.mountComposer(host, target, selectedStarComposer());
         const removeClose = addCloseEntry(view.bar);
         current.view = {
           bar: view.bar,
+          follow: view.follow,
           dispose: () => {
             removeClose();
             view.dispose();
