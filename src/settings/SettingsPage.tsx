@@ -144,8 +144,14 @@ function StarSettings({ star, several }: { star: Star; several: boolean }) {
   const [editing, setEditing] = useState(false);
   // The record's name, as a write here or a hand edit of the front matter changes it, unless the field is being edited.
   const shown = editing ? name : star.name;
+  // Escape leaves the field through its blur, which this tells to write nothing: the blur's `name` is still the typed one.
+  const cancelled = useRef(false);
   const commit = () => {
     setEditing(false);
+    if (cancelled.current) {
+      cancelled.current = false;
+      return;
+    }
     if (name.trim() !== star.name) void setStarFields(star.id, { name: name.trim() });
   };
   return (
@@ -173,8 +179,8 @@ function StarSettings({ star, several }: { star: Star; several: boolean }) {
           onKeyDown={(event) => {
             if (event.key === "Enter") event.currentTarget.blur();
             if (event.key === "Escape") {
+              cancelled.current = true;
               setName(star.name);
-              setEditing(false);
               event.currentTarget.blur();
             }
           }}
