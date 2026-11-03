@@ -114,7 +114,7 @@ body,
   -webkit-app-region: drag;
 }
 
-.part.editor > .content .editor-group-container > .title :is(.tab, .editor-actions, .scrollbar) {
+.part.editor > .content .editor-group-container > .title :is(.tab, .editor-actions, .title-actions, .scrollbar) {
   -webkit-app-region: no-drag;
 }
 
@@ -132,8 +132,8 @@ body,
    `pult-mode-vscode` on the workbench while that mode is on): rules for what
    no setting or context key turns off. Each one names what it hides. */
 
-/* The editor tabs' row's "More Actions…" dropdown, the tail of the editor title's toolbar. */
-.monaco-workbench:not(.pult-mode-vscode) .part.editor .title .editor-actions .action-item:has(> .monaco-dropdown .codicon-toolbar-more) {
+/* The editor tabs' row's "More Actions…" dropdown, the tail of the editor title's toolbar (`.title-actions` while the tab bar shows a single tab). */
+.monaco-workbench:not(.pult-mode-vscode) .part.editor .title :is(.editor-actions, .title-actions) .action-item:has(> .monaco-dropdown .codicon-toolbar-more) {
   display: none;
 }
 
