@@ -12,7 +12,7 @@ import { showThreads } from "../panel/explorer.ts";
 import { writeUserValue } from "../settings/userSetting.ts";
 import { limitsShelf, USAGE_LIMITS_MODES, type UsageLimitsMode } from "./limits.ts";
 import { limitsStore, refreshLimits, startLimitsModel } from "./model.ts";
-import { revealLimits } from "./shelf.ts";
+import { revealLimits, setLimitsShowAll } from "./shelf.ts";
 
 export { USAGE_LIMITS_MODES, type UsageLimitsMode } from "./limits.ts";
 
@@ -43,7 +43,11 @@ async function followMode(): Promise<void> {
   const configuration = await getService(IConfigurationService);
   const read = () => {
     const value = configuration.getValue(SETTING);
-    mode = isMode(value) ? value : DEFAULT_MODE;
+    const next = isMode(value) ? value : DEFAULT_MODE;
+    if (next === mode) return;
+    mode = next;
+    // A mode picked ends Show all, so the shelf shows what the mode shows.
+    setLimitsShowAll(false);
     for (const listener of listeners) listener();
   };
   read();
@@ -90,8 +94,9 @@ export function registerLimits(): void {
           notifications.info("Pult: no provider reports any usage of its limits.");
           return;
         }
-        revealLimits();
+        // The Pult tab first, so the shelf is laid out when it scrolls into view.
         await showThreads();
+        revealLimits();
       }
     },
   );

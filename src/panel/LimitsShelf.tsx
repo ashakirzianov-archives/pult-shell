@@ -138,9 +138,11 @@ function AccountRows({
 /** When each environment's limits were last checked, per environment while several are held, then the notices. */
 function headerTooltip(limits: LimitsState, now: number): string {
   const several = limits.checks.length > 1;
-  const checks = limits.checks.map(({ name, checkedAt }) => {
-    const checked = checkedAt === null ? "not checked yet" : `checked ${ago(checkedAt, now)}`;
-    return several ? `${name}: ${checked}` : checked.charAt(0).toUpperCase() + checked.slice(1);
+  // An environment none of whose providers report limits has no check to name.
+  const checks = limits.checks.flatMap(({ name, checkedAt }) => {
+    if (checkedAt === null) return [];
+    const checked = `checked ${ago(checkedAt, now)}`;
+    return [several ? `${name}: ${checked}` : checked.charAt(0).toUpperCase() + checked.slice(1)];
   });
   return [...checks, ...limits.notices].join("\n");
 }
