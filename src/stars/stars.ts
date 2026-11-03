@@ -5,6 +5,7 @@
 // adopts one.
 import type { ShellProject, ShellThread } from "../threads/store.ts";
 import type { StarRecord } from "./record.ts";
+import { transcriptStart } from "./transcript.ts";
 
 /** A Star's folder on an environment, as the page read it. */
 export interface StarFolder {
@@ -12,8 +13,8 @@ export interface StarFolder {
   /** Its host path. */
   readonly root: string;
   readonly record: StarRecord;
-  /** How many transcripts its `conversations/<environmentId>/` holds, that of its own environment. */
-  readonly conversations: number;
+  /** The transcripts' file names in its `conversations/<environmentId>/`, its own environment's, oldest first (`transcript.ts`). */
+  readonly transcripts: ReadonlyArray<string>;
 }
 
 /** A Star's folder on one environment, and its project there, null until the page adopts it. */
@@ -21,13 +22,13 @@ export interface StarHome {
   readonly environmentId: string;
   readonly root: string;
   readonly projectId: string | null;
-  readonly conversations: number;
+  readonly transcripts: ReadonlyArray<string>;
 }
 
 /** What a Star reads of a thread of its projects. */
 export type StarThread = Pick<
   ShellThread,
-  "environmentId" | "id" | "projectId" | "parentId" | "settled" | "createdAt" | "working" | "workingSince" | "ageFrom"
+  "environmentId" | "id" | "projectId" | "parentId" | "settled" | "settledAt" | "createdAt" | "working" | "workingSince" | "ageFrom"
 >;
 
 /** Asleep while it has no current conversation, Working while that conversation's run is on, else Awake. */
@@ -46,6 +47,12 @@ export interface Star<Thread extends StarThread = ShellThread> {
   readonly homes: ReadonlyArray<StarHome>;
   readonly current: Thread | null;
   readonly latest: Thread | null;
+  /**
+   * When its last conversation ended, its latest settlement, else, for one
+   * the page's threads no longer hold, when its newest transcript's
+   * conversation started; null for a Star that has had none.
+   */
+  readonly lastEnded: string | null;
   readonly state: StarState;
 }
 
@@ -63,6 +70,19 @@ export function projectAt(projects: ReadonlyArray<Pick<ShellProject, "environmen
 
 const newestFirst = <Thread extends StarThread>(threads: ReadonlyArray<Thread>) =>
   threads.toSorted((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
+
+/** A Star's conversations among `threads`: the root threads of its homes' projects, newest first. */
+export function conversationsOf<Thread extends StarThread>(homes: ReadonlyArray<StarHome>, threads: ReadonlyArray<Thread>): Thread[] {
+  return newestFirst(
+    threads.filter(
+      (thread) =>
+        thread.parentId === null &&
+        homes.some((home) => home.projectId !== null && home.environmentId === thread.environmentId && home.projectId === thread.projectId),
+    ),
+  );
+}
+
+const latestOf = (times: ReadonlyArray<string>) => times.reduce<string | null>((latest, time) => (latest === null || Date.parse(time) > Date.parse(latest) ? time : latest), null);
 
 /**
  * The Stars of the folders read, in the order of their first folder: folders
@@ -82,18 +102,14 @@ export function starsOf<Thread extends StarThread>(
       environmentId: folder.environmentId,
       root: folder.root,
       projectId: projectAt(projects, folder.environmentId, folder.root)?.id ?? null,
-      conversations: folder.conversations,
+      transcripts: folder.transcripts,
     });
   }
   return [...byId.values()].map(({ record, homes }) => {
-    const roots = newestFirst(
-      threads.filter(
-        (thread) =>
-          thread.parentId === null &&
-          homes.some((home) => home.projectId !== null && home.environmentId === thread.environmentId && home.projectId === thread.projectId),
-      ),
-    );
+    const roots = conversationsOf(homes, threads);
     const current = roots.find((thread) => !thread.settled) ?? null;
+    const ended = latestOf(roots.flatMap((thread) => (thread.settled && thread.settledAt !== null ? [thread.settledAt] : [])));
+    const started = latestOf(homes.flatMap((home) => home.transcripts.flatMap((name) => transcriptStart(name) ?? [])));
     return {
       id: record.id,
       name: record.name,
@@ -102,14 +118,15 @@ export function starsOf<Thread extends StarThread>(
       homes,
       current,
       latest: roots[0] ?? null,
+      lastEnded: ended ?? started,
       state: current === null ? "asleep" : current.working ? "working" : "awake",
     };
   });
 }
 
-/** Since when a sleeping Star sleeps: its latest conversation's settlement, else its creation. */
-export function asleepSince(star: Pick<Star<StarThread>, "latest" | "created">): string {
-  return star.latest?.ageFrom ?? star.created;
+/** Since when a sleeping Star sleeps: its last conversation's end, else its creation. */
+export function asleepSince(star: Pick<Star<StarThread>, "lastEnded" | "created">): string {
+  return star.lastEnded ?? star.created;
 }
 
 /**
@@ -123,13 +140,17 @@ export function wakeHome(star: Pick<Star<StarThread>, "homes" | "latest">, held:
 }
 
 /**
- * How many earlier conversations the fold counts: the transcripts of the
- * current conversation's environment, else of the one that last ran, as
- * that environment's home holds them; 0 hides the fold.
+ * The home whose transcripts the fold shows: that of the environment the
+ * current conversation runs on, else of the one that last ran.
  */
-export function earlierConversations(star: Pick<Star<StarThread>, "homes" | "current" | "latest">): number {
+export function foldHome(star: Pick<Star<StarThread>, "homes" | "current" | "latest">): StarHome | undefined {
   const environmentId = (star.current ?? star.latest)?.environmentId;
-  return star.homes.find((home) => home.environmentId === environmentId)?.conversations ?? 0;
+  return star.homes.find((home) => home.environmentId === environmentId);
+}
+
+/** How many earlier conversations the fold counts, its home's transcripts; 0 hides the fold. */
+export function earlierConversations(star: Pick<Star<StarThread>, "homes" | "current" | "latest">): number {
+  return foldHome(star)?.transcripts.length ?? 0;
 }
 
 /** Which of the Stars a thread is the conversation of: a root thread of one of its homes' projects. */

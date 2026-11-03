@@ -22,6 +22,7 @@ import {
   withRecordFields,
 } from "./record.ts";
 import { starEnabled, starSettingKnown } from "./settings.ts";
+import { isTranscriptName, transcriptsFolder } from "./transcript.ts";
 import {
   creationTarget,
   findStarOfProject,
@@ -117,9 +118,12 @@ async function readFolders(server: WorkspaceServer, environmentId: string, home:
         const root = hostJoin(home, STARS_DIRECTORY, lastSegment(entry.path));
         const record = parseRecord((await readRecordFile(server, root))?.contents ?? "");
         if (record === undefined) return [];
-        const transcripts = await listed(server, root, `${CONVERSATIONS_DIRECTORY}/${environmentId}`).catch(() => null);
-        const conversations = transcripts?.filter((transcript) => transcript.kind === "file").length ?? 0;
-        return [{ environmentId, root, record, conversations }];
+        const listing = await listed(server, root, transcriptsFolder(environmentId)).catch(() => null);
+        const transcripts = (listing ?? [])
+          .flatMap((entry) => (entry.kind === "file" ? [lastSegment(entry.path)] : []))
+          .filter(isTranscriptName)
+          .toSorted();
+        return [{ environmentId, root, record, transcripts }];
       }),
   );
   for (const result of results) {
@@ -280,7 +284,7 @@ class StarsModel {
     const stars = starsOf(folders, projects, threads);
     // The readings too, which tell where a Star may be created.
     const signature = JSON.stringify([
-      stars.map((star) => [star.id, star.name, star.tint, star.homes, star.state, star.current?.id, star.current?.workingSince, star.latest?.id, star.latest?.ageFrom]),
+      stars.map((star) => [star.id, star.name, star.tint, star.homes, star.state, star.current?.id, star.current?.workingSince, star.latest?.id, star.lastEnded]),
       [...this.readings.values()].map((reading) => reading.read),
     ]);
     if (signature !== this.signature) {
@@ -396,7 +400,7 @@ class StarsModel {
       if (found === "other") return refuse();
       const record = newRecord(crypto.randomUUID(), new Date().toISOString());
       await server.writeFile({ cwd: root, relativePath: RECORD_FILE, contents: stockInstructions(record) });
-      created = { environmentId, root, record, conversations: 0 };
+      created = { environmentId, root, record, transcripts: [] };
       await setStarIcon(environmentId, projectId);
       notifications.prompt(Severity.Info, "Your Star is ready.", [{ label: "Open Star", run: () => void openStar(record.id) }]);
     } catch (error) {
@@ -495,6 +499,8 @@ export function starById(starId: string): Star | undefined {
 }
 
 export const createStar = (environmentId: string) => model.create(environmentId);
+/** Reads the environment's Stars' folders again: after the page wrote a transcript, which a watch may tell late or not at all. */
+export const rereadStars = (environmentId: string) => model.read(environmentId);
 export const canCreateStarOn = (environmentId: string) => model.canCreateOn(environmentId);
 export const setStarFields = (starId: string, changes: Partial<Pick<StarRecord, "name" | "tint">>) => model.setFields(starId, changes);
 

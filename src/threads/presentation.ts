@@ -239,6 +239,7 @@ export function shellThreads(
       id: thread.id,
       shelf,
       settled,
+      settledAt: settled ? thread.settledAt : null,
       parentId: thread.lineage.parentThreadId,
       rootId: thread.lineage.rootThreadId,
       projectId: thread.projectId,

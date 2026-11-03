@@ -3,22 +3,24 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
 import { newRecord } from "./record.ts";
-import { creationTarget, earlierConversations, type EnvironmentReading, foldersToAdopt, findStarOfThread, starsOf, wakeHome } from "./stars.ts";
+import { asleepSince, creationTarget, earlierConversations, type EnvironmentReading, foldersToAdopt, findStarOfThread, starsOf, wakeHome } from "./stars.ts";
 
 const record = (id: string) => newRecord(id, "2026-11-01T00:00:00.000Z");
-const folder = (environmentId: string, id: string, root = "/home/a/.pult/stars/star", conversations = 0) => ({
+const folder = (environmentId: string, id: string, root = "/home/a/.pult/stars/star", transcripts: ReadonlyArray<string> = []) => ({
   environmentId,
   root,
   record: record(id),
-  conversations,
+  transcripts,
 });
+const names = (count: number) => Array.from({ length: count }, (_, index) => `2026-11-0${index + 1}T10-00-00Z-t${index}.md`);
 const project = (environmentId: string, id: string, root: string | null = "/home/a/.pult/stars/star") => ({ environmentId, id, root });
-const thread = (environmentId: string, id: string, createdAt: string, overrides: Partial<{ projectId: string; parentId: string | null; settled: boolean; working: boolean }> = {}) => ({
+const thread = (environmentId: string, id: string, createdAt: string, overrides: Partial<{ projectId: string; parentId: string | null; settled: boolean; settledAt: string | null; working: boolean }> = {}) => ({
   environmentId,
   id,
   projectId: "star-project",
   parentId: null,
   settled: false,
+  settledAt: null,
   createdAt,
   working: false,
   workingSince: null,
@@ -53,12 +55,26 @@ describe("starsOf", () => {
     assert.equal(starsOf([folder("a", "one")], projects, [thread("a", "t", "2026-11-01T00:00:00.000Z", { settled: true })])[0]?.state, "asleep");
     assert.equal(starsOf([folder("a", "one")], projects, [thread("a", "t", "2026-11-01T00:00:00.000Z", { working: true })])[0]?.state, "working");
   });
+
+  test("has slept since its last conversation's end, else its newest transcript's start, else its creation", () => {
+    const projects = [project("a", "star-project")];
+    const threads = [
+      thread("a", "older-ended-later", "2026-11-01T00:00:00.000Z", { settled: true, settledAt: "2026-11-03T09:00:00.000Z" }),
+      thread("a", "newer", "2026-11-02T00:00:00.000Z", { settled: true, settledAt: "2026-11-02T09:00:00.000Z" }),
+    ];
+    const [ended] = starsOf([folder("a", "one", undefined, names(2))], projects, threads);
+    assert.equal(ended && asleepSince(ended), "2026-11-03T09:00:00.000Z");
+    const [listed] = starsOf([folder("a", "one", undefined, names(2))], projects, []);
+    assert.equal(listed && asleepSince(listed), "2026-11-02T10:00:00.000Z");
+    const [fresh] = starsOf([folder("a", "one")], projects, []);
+    assert.equal(fresh && asleepSince(fresh), "2026-11-01T00:00:00.000Z");
+  });
 });
 
 describe("a Star's places", () => {
   const projects = [project("a", "star-project"), project("b", "star-project")];
   const threads = [thread("b", "last", "2026-11-02T00:00:00.000Z", { settled: true })];
-  const [star] = starsOf([folder("a", "one", undefined, 3), folder("b", "one", undefined, 5)], projects, threads);
+  const [star] = starsOf([folder("a", "one", undefined, names(3)), folder("b", "one", undefined, names(5))], projects, threads);
 
   test("wakes in its latest conversation's home, else its first held one", () => {
     assert.equal(star && wakeHome(star, () => true)?.environmentId, "b");

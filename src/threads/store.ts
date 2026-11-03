@@ -12,6 +12,8 @@ export interface ShellThread {
   readonly shelf: ShelfName | null;
   /** Settled, whatever its shelf: a Star's thread, on none, is asleep so. */
   readonly settled: boolean;
+  /** When it was settled, while it is: a Star's conversation's end (`src/stars/`). */
+  readonly settledAt: string | null;
   /** The thread that spawned or forked it, in the same environment; null for a thread of its own. */
   readonly parentId: string | null;
   /** The top of its lineage, itself for a thread of its own. */
