@@ -24,8 +24,10 @@ import { SettingsInput } from "../settings/pane.tsx";
 import { isStarRoot } from "../stars/record.ts";
 import { starById, starOfProject, starOfThread, starTarget } from "../stars/model.ts";
 import { HasStarContext, pickStar } from "../stars/commands.ts";
+import { starEnabled } from "../stars/settings.ts";
 import { DraftInput, isLeadTab, type LeadTab, onDidPromoteDraft, StarInput, ThreadInput } from "./pane.tsx";
-import { isSubagent, type ShellProject, type ShelfName, threadStore } from "./store.ts";
+import { nextAfterParking } from "./parking.ts";
+import { isSubagent, scopedKey, type ShellProject, type ShelfName, threadStore } from "./store.ts";
 
 /** The thread whose tabs the editor part shows, in the environment it belongs to. */
 export interface ThreadSelection {
@@ -226,6 +228,25 @@ export function selectThread(environmentId: string, threadId: string): Promise<v
  */
 export function selectStar(starId: string): Promise<void> {
   return enqueue(() => switchTo({ starId }));
+}
+
+/**
+ * Show Star turned off while a Star is selected moves the selection on, as
+ * settling the selected thread does (`park.ts`): to the first pinned or
+ * active card, the Star's card being above them all, else a new thread
+ * (`pult-shell.newThread`, a pick of the projects), else, the pick
+ * dismissed or no project to pick, the Explorer workspace. The switch
+ * closes the Star's tab and keeps its working set, so selecting the Star
+ * again, shown or through Open Star, brings its files back.
+ */
+async function leaveHiddenStar(): Promise<void> {
+  if (starEnabled.get() || !isStar(selected)) return;
+  const keyed = threadStore.get().threads.map((thread) => ({ id: scopedKey(thread.environmentId, thread.id), shelf: thread.shelf, thread }));
+  const next = nextAfterParking(keyed, "", new Set());
+  const thread = keyed.find((each) => each.id === next)?.thread;
+  if (thread !== undefined) return selectThread(thread.environmentId, thread.id);
+  await (await getService(ICommandService)).executeCommand("pult-shell.newThread");
+  if (isStar(selected)) await selectExplorer();
 }
 
 /**
@@ -437,6 +458,8 @@ export async function restoreThreadSelection(): Promise<void> {
   onDidSelectThread(updateSubagentKey);
   threadStore.subscribe(updateSubagentKey);
   updateSubagentKey();
+  // A Star hidden while selected.
+  starEnabled.subscribe(() => void leaveHiddenStar());
 }
 
 /**
