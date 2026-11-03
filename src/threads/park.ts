@@ -179,6 +179,13 @@ async function park(target: ThreadRef, wake?: string): Promise<void> {
 }
 
 export const settleThread = (target: ThreadRef) => park(target);
+/**
+ * Settles a thread on the page's own account, with no notification and no
+ * move of the selection, its server refusing one that is not at rest: a Star
+ * falling asleep (`src/stars/conversations.ts`). Settling a settled thread
+ * keeps its settlement.
+ */
+export const settleQuietly = (target: ThreadRef) => run(target, Operations.settleThread({ threadId: ThreadId.make(target.id) }));
 export const snoozeThread = (target: ThreadRef, wake: string) => park(target, wake);
 export const unsettleThread = (target: ThreadRef) =>
   void act(target, "settlement", (command) => run(target, Operations.unsettleThread({ ...command, reason: "user" })));

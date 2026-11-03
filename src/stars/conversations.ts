@@ -1,0 +1,214 @@
+import { request } from "@t3tools/client-runtime/rpc";
+import { ORCHESTRATION_V2_WS_METHODS, ThreadId } from "@t3tools/contracts";
+
+import { connection } from "../connection/index.ts";
+import { environmentServer } from "../files/server.ts";
+import { settleQuietly } from "../threads/park.ts";
+import { scopedKey, type ShellThread, threadStore } from "../threads/store.ts";
+import { refreshTranscript } from "./foldState.ts";
+import { rereadStars, starStore } from "./model.ts";
+import { starEnabled, starSettingKnown } from "./settings.ts";
+import { asleepBy, type Wakefulness, wakefulness } from "./sleep.ts";
+import { conversationsOf, type StarHome } from "./stars.ts";
+import { formatTranscript, transcriptEnded, transcriptName, transcriptsFolder } from "./transcript.ts";
+
+/** The longest the page waits between looks at a deadline: a timer's clock stops while the machine sleeps, as the thread model's wake timer knows. */
+const CLOCK_CHECK_MS = 60_000;
+/** How long a failed read, settle or write waits before the page tries it again. */
+const RETRY_MS = 5 * 60_000;
+/** How many transcripts the page checks or writes at once. */
+const TRANSCRIPTS_AT_ONCE = 2;
+
+/**
+ * An open conversation as the page last evaluated it: by what of its shell
+ * row it read, its wakefulness once its projection is in (undefined while it
+ * is read, or after a failed read), and when it was last read.
+ */
+interface Evaluation {
+  readonly stamp: string;
+  reading: boolean;
+  wakefulness: Wakefulness | undefined;
+  readAt: number;
+}
+
+function errorMessage(error: unknown): string {
+  if (typeof error === "object" && error !== null && "message" in error) return String(error.message);
+  return String(error);
+}
+
+const readProjection = (thread: Pick<ShellThread, "environmentId" | "id">) =>
+  connection.run(thread.environmentId, request(ORCHESTRATION_V2_WS_METHODS.getThreadProjection, { threadId: ThreadId.make(thread.id) }));
+
+/** What of a shell row can change a conversation's wakefulness: its projection is read again when it changes. */
+const stampOf = (thread: ShellThread) => JSON.stringify([thread.updatedAt, thread.latestRun, thread.canSnooze]);
+
+const sameInstant = (left: string | undefined, right: string) => left !== undefined && Date.parse(left) === Date.parse(right);
+
+/**
+ * The Stars' conversations, kept by the page (xaxis `pult/issues/star-sleep`):
+ * it puts a Star to sleep when its conversation's deadline passes
+ * (`sleep.ts`), and writes the transcript of every conversation it sees
+ * asleep (`transcript.ts`), whoever settled it. Lazily, whenever it looks:
+ * on every change of the threads or the Stars, and while a deadline is
+ * pending on a timer to it, checking the clock at least once a minute. An
+ * open conversation at rest has its projection read once per change of its
+ * shell row; at its deadline the projection is read again and, the rule
+ * still holding, the thread is settled, the server refusing it if a run
+ * started meanwhile. A settled conversation's transcript is written where it
+ * is missing, or its `ended` is not the thread's settlement (un-settled and
+ * settled again), and only when its text differs, so pages racing write one
+ * file; each one checked once per settlement per page session. A server
+ * without thread settlement keeps its Star awake. Nothing runs while Show
+ * Star is off.
+ */
+class StarConversations {
+  private readonly evaluations = new Map<string, Evaluation>();
+  private readonly settling = new Set<string>();
+  /** The settlement each conversation's transcript was found or written for, by `scopedKey`. */
+  private readonly kept = new Map<string, string>();
+  private readonly keeping = new Set<string>();
+  private readonly keepFailedAt = new Map<string, number>();
+  private timer: ReturnType<typeof setTimeout> | undefined;
+
+  start(): void {
+    threadStore.subscribe(() => this.update());
+    starStore.subscribe(() => this.update());
+    starEnabled.subscribe(() => this.update());
+    this.update();
+  }
+
+  private update(): void {
+    clearTimeout(this.timer);
+    this.timer = undefined;
+    if (!starSettingKnown() || !starEnabled.get()) return;
+    const now = Date.now();
+    let next = Number.POSITIVE_INFINITY;
+    const open = new Set<string>();
+    const threads = threadStore.get().threads;
+    for (const star of starStore.get()) {
+      for (const thread of conversationsOf(star.homes, threads)) {
+        const key = scopedKey(thread.environmentId, thread.id);
+        if (thread.settled) {
+          const retry = this.keep(star.homes, thread, now);
+          if (retry !== undefined) next = Math.min(next, retry);
+          continue;
+        }
+        if (threadStore.environment(thread.environmentId)?.features.settlement !== true || thread.working) continue;
+        open.add(key);
+        const stamp = stampOf(thread);
+        let evaluation = this.evaluations.get(key);
+        if (evaluation?.stamp !== stamp) {
+          evaluation = { stamp, reading: false, wakefulness: undefined, readAt: now };
+          this.evaluations.set(key, evaluation);
+          void this.evaluate(thread, evaluation);
+          continue;
+        }
+        if (evaluation.reading) continue;
+        const state = evaluation.wakefulness;
+        if (state?.kind === "deadline") {
+          if (asleepBy(state, now)) void this.sleep(thread, evaluation);
+          else next = Math.min(next, state.at);
+          continue;
+        }
+        // Held, or not read: looked at again a while later, since what holds it, a held queue's message, may go without a change of its shell row.
+        if (now - evaluation.readAt >= RETRY_MS) void this.evaluate(thread, evaluation);
+        else next = Math.min(next, evaluation.readAt + RETRY_MS);
+      }
+    }
+    for (const key of this.evaluations.keys()) if (!open.has(key)) this.evaluations.delete(key);
+    if (next !== Number.POSITIVE_INFINITY) this.timer = setTimeout(() => this.update(), Math.min(Math.max(next - now, 0) + 1, CLOCK_CHECK_MS));
+  }
+
+  /** Reads the conversation's projection and its wakefulness by it, then looks again. */
+  private async evaluate(thread: ShellThread, evaluation: Evaluation): Promise<void> {
+    evaluation.reading = true;
+    try {
+      evaluation.wakefulness = wakefulness(await readProjection(thread));
+    } catch (error) {
+      console.warn(`[pult-shell] could not read the Star's conversation ${thread.id}: ${errorMessage(error)}`);
+      evaluation.wakefulness = undefined;
+    }
+    evaluation.reading = false;
+    evaluation.readAt = Date.now();
+    if (this.evaluations.get(scopedKey(thread.environmentId, thread.id)) === evaluation) this.update();
+  }
+
+  /** Puts the conversation to sleep once its fresh projection says so: settles it, its transcript following as the page sees it settled. */
+  private async sleep(thread: ShellThread, evaluation: Evaluation): Promise<void> {
+    const key = scopedKey(thread.environmentId, thread.id);
+    if (this.settling.has(key)) return;
+    this.settling.add(key);
+    try {
+      const projection = await readProjection(thread);
+      const state = wakefulness(projection);
+      evaluation.wakefulness = state;
+      evaluation.readAt = Date.now();
+      const settled = projection.thread.settledOverride === "settled";
+      if (!settled && asleepBy(state, Date.now())) await settleQuietly(thread);
+      // Asleep, by this page or another: the store brings the settlement, and with it the transcript.
+      if (settled || asleepBy(state, Date.now())) evaluation.wakefulness = undefined;
+    } catch (error) {
+      console.warn(`[pult-shell] could not put the Star's conversation ${thread.id} to sleep: ${errorMessage(error)}`);
+      // Read again a while later, as one held awake is.
+      evaluation.wakefulness = undefined;
+      evaluation.readAt = Date.now();
+    } finally {
+      this.settling.delete(key);
+    }
+    this.update();
+  }
+
+  /**
+   * Sees to a settled conversation's transcript in its environment's home,
+   * once per settlement, a few at a time; when it next may try again after a
+   * failure, if it is waiting on one.
+   */
+  private keep(homes: ReadonlyArray<StarHome>, thread: ShellThread, now: number): number | undefined {
+    const key = scopedKey(thread.environmentId, thread.id);
+    const settledAt = thread.settledAt;
+    if (settledAt === null || this.kept.get(key) === settledAt || this.keeping.has(key)) return undefined;
+    const failedAt = this.keepFailedAt.get(key);
+    if (failedAt !== undefined && now - failedAt < RETRY_MS) return failedAt + RETRY_MS;
+    const home = homes.find((each) => each.environmentId === thread.environmentId);
+    if (home === undefined || connection.environment(home.environmentId)?.phase !== "ready" || this.keeping.size >= TRANSCRIPTS_AT_ONCE) return undefined;
+    this.keeping.add(key);
+    void this.write(home, thread, settledAt).then(
+      () => {
+        this.kept.set(key, settledAt);
+        this.keepFailedAt.delete(key);
+      },
+      (error: unknown) => {
+        console.warn(`[pult-shell] could not write the transcript of the Star's conversation ${thread.id}: ${errorMessage(error)}`);
+        this.keepFailedAt.set(key, Date.now());
+      },
+    ).finally(() => {
+      this.keeping.delete(key);
+      this.update();
+    });
+    return undefined;
+  }
+
+  /** Writes the transcript where it is missing or ended otherwise, and only when its text differs from the file's. */
+  private async write(home: StarHome, thread: ShellThread, settledAt: string): Promise<void> {
+    const name = transcriptName(thread.createdAt, thread.id);
+    const relativePath = `${transcriptsFolder(home.environmentId)}/${name}`;
+    const server = environmentServer(home.environmentId);
+    const existing = home.transcripts.includes(name) ? await server.readFile({ cwd: home.root, relativePath, allowMissing: true }) : undefined;
+    const present = existing !== undefined && existing.exists !== false;
+    if (present && sameInstant(transcriptEnded(existing.contents), settledAt)) return;
+    const contents = formatTranscript(await readProjection(thread), threadStore.environment(home.environmentId)?.name ?? home.environmentId);
+    // Un-settled since: its next settlement writes it.
+    if (contents === undefined) return;
+    if (present && !existing.truncated && existing.contents === contents) return;
+    await server.writeFile({ cwd: home.root, relativePath, contents });
+    refreshTranscript(home.environmentId, home.root, name);
+    await rereadStars(home.environmentId);
+  }
+}
+
+const conversations = new StarConversations();
+
+/** Starts keeping the Stars' conversations, after the Stars' model, on the page's thread model. */
+export function startStarConversations(): void {
+  conversations.start();
+}
