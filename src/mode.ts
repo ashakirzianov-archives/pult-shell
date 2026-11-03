@@ -30,14 +30,19 @@ export type Mode = (typeof MODES)[number]["mode"];
  * What the mode flips, each thing hidden by default and shown in VS Code
  * mode: the context key `pult.vscodeMode`, for `when` clauses, and the class
  * `pult-mode-vscode` on the workbench's element, for the default-mode rules
- * in `style.css` (the "More Actions" of the editor tabs' row); and the tab
- * bar held on Multiple in the in-memory configuration layer, since a thread's
- * tab is its header, the user's own Single or None applying in VS Code mode
- * alone, where the ways to them show (`src/tabBar.ts`).
+ * in `style.css` (the "More Actions" of the editor tabs' row); and the
+ * settings held in the in-memory configuration layer, the user's own applying
+ * in VS Code mode alone, where the stock ways to change them show
+ * (`src/editorMenus.ts`).
  */
 export const VSCodeModeContext = new RawContextKey<boolean>("pult.vscodeMode", false);
 const VSCODE_MODE_CLASS = "pult-mode-vscode";
-const SHOW_TABS = "workbench.editor.showTabs";
+/** What Pult's mode holds: the tab bar on Multiple, since a thread's tab is its header; the editor actions on it, since the title bar never shows; and no window from a tab dragged out, since the shell's selection spans one window. */
+const HELD_SETTINGS = {
+  "workbench.editor.showTabs": "multiple",
+  "workbench.editor.editorActionsLocation": "default",
+  "workbench.editor.dragToOpenWindow": false,
+};
 
 /** Registers the setting and the palette's switches. Called before the workbench starts. */
 export function registerMode(): void {
@@ -110,7 +115,9 @@ export async function startMode(): Promise<void> {
     const vscode = choice.current() === "vscode";
     key.set(vscode);
     document.querySelector(".monaco-workbench")?.classList.toggle(VSCODE_MODE_CLASS, vscode);
-    void configuration.updateValue(SHOW_TABS, vscode ? undefined : "multiple", ConfigurationTarget.MEMORY);
+    for (const [key, value] of Object.entries(HELD_SETTINGS)) {
+      void configuration.updateValue(key, vscode ? undefined : value, ConfigurationTarget.MEMORY);
+    }
   };
   apply();
   choice.onDidChange(apply);
