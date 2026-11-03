@@ -35,14 +35,33 @@ function scrollerOf(element: HTMLElement): HTMLElement | null {
   return null;
 }
 
+/** LegendList's own tolerance, below which it leaves a change of its header's size alone (`SCROLL_ADJUST_EPSILON`). */
+const LIST_ADJUST_EPSILON = 0.1;
+
 /**
- * Keeps what the user reads where it is as the fold changes height: while
- * the fold's bottom, the live view's top, was at or below the top of the
- * scroller's viewport, the scroller moves by the change, so a conversation
- * opening, or an older one shown, grows the fold upwards, out of sight. A
- * fold scrolled wholly past is the timeline's list's to keep, which adjusts
- * for its header itself. The fold placed into a timeline, as the view
- * mounts or its list mounts its header again, moves nothing.
+ * The timeline list's header, LegendList's element around what the timeline
+ * puts at its top, the fold's slot among it (`TimelineHeaderSlotOutlet`, a
+ * row frame of the header's own); null over an empty timeline, which has no
+ * list.
+ */
+function listHeaderOf(element: HTMLElement): HTMLElement | null {
+  if (element.closest(".messages-timeline-scroll") === null) return null;
+  return element.closest(".messages-timeline-row-frame")?.parentElement ?? null;
+}
+
+/**
+ * Keeps what the user reads where it is as the fold changes height, so a
+ * conversation opening, or an older one shown, grows the fold upwards, out
+ * of sight. In a timeline's list the anchor is the list's header, the fold
+ * and what the timeline shows beside it, and exactly one of the list and
+ * the fold moves the scroller by the change: LegendList while the
+ * viewport's top was at or past the header's end
+ * (`shouldAdjustForHeaderSizeChange`), the fold otherwise. Over an empty
+ * timeline, the fold alone, while its bottom was below the viewport's top.
+ * Where the viewport's top was is the scroller's offset as its last scroll
+ * event left it, before this frame's changes, LegendList's own adjustment's
+ * among them. The fold placed into a timeline, as the view mounts or its
+ * list mounts its header again, moves nothing.
  */
 function useAnchoredHeight() {
   const [element, setElement] = useState<HTMLElement | null>(null);
@@ -50,6 +69,13 @@ function useAnchoredHeight() {
     if (element === null) return;
     // Undefined while the fold is in no timeline.
     let height = element.isConnected ? element.offsetHeight : undefined;
+    const initial = scrollerOf(element);
+    let settled = initial === null ? undefined : { scroller: initial, top: initial.scrollTop };
+    const onScroll = (event: Event) => {
+      const scroller = scrollerOf(element);
+      if (event.target === scroller && scroller !== null) settled = { scroller, top: scroller.scrollTop };
+    };
+    document.addEventListener("scroll", onScroll, { capture: true, passive: true });
     const observer = new ResizeObserver(() => {
       const previous = height;
       height = element.isConnected ? element.offsetHeight : undefined;
@@ -57,10 +83,18 @@ function useAnchoredHeight() {
       const change = height - previous;
       const scroller = scrollerOf(element);
       if (scroller === null) return;
-      if (element.getBoundingClientRect().bottom - change >= scroller.getBoundingClientRect().top) scroller.scrollTop += change;
+      const before = settled?.scroller === scroller ? settled.top : scroller.scrollTop;
+      const header = listHeaderOf(element);
+      // The anchor's end before the change, in the scroller's content, which no scrolling moves.
+      const end = (header ?? element).getBoundingClientRect().bottom - scroller.getBoundingClientRect().top + scroller.scrollTop - change;
+      const listAdjusts = header !== null && before >= end - LIST_ADJUST_EPSILON;
+      if (!listAdjusts && before <= end) scroller.scrollTop += change;
     });
     observer.observe(element);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      document.removeEventListener("scroll", onScroll, { capture: true });
+    };
   }, [element]);
   return setElement;
 }
