@@ -99,7 +99,8 @@ export interface PanelRows<File extends FileRef, Thread extends ThreadRef = Shel
  * them (`PanelView.tsx`), as upstream's sidebar jumps reach its visible
  * rows: the Explorer shelf's open files, its environments' rows left out,
  * then the cards, Ready's drafts and threads, and the Working, Snoozed and
- * Settled shelves'; a collapsed list reaches its selected row alone.
+ * Settled shelves'; a collapsed list reaches its selected row alone. The
+ * Limits shelf's rows, last, are none: they select nothing.
  */
 export function jumpTargets<File extends FileRef, Thread extends ThreadRef>(panel: PanelRows<File, Thread>): JumpTarget<File, Thread>[] {
   const isHighlighted = (entry: ExplorerEntry<File>) => entry.key === panel.explorer.highlighted;

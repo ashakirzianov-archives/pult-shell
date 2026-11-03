@@ -31,6 +31,7 @@ import { installDesktopTitleBar } from "./desktop/titleBar.ts";
 import { registerMode, startMode } from "./mode.ts";
 import { gateEditorMenus } from "./editorMenus.ts";
 import { registerPultFiles } from "./files/index.ts";
+import { registerLimits } from "./limits/index.ts";
 import { startPanelRows } from "./panel/rows.tsx";
 import { registerPanel } from "./panel/view.tsx";
 import { registerColorSchemeCommand } from "./settings/colorScheme.ts";
@@ -64,6 +65,7 @@ startConnection();
 // Before the workbench initialises, so the explorer restores its `pult:` folders on the page's provider.
 registerPultFiles();
 startThreadModel();
+registerLimits();
 registerThreadPane();
 registerSettingsPane();
 registerColorSchemeCommand();

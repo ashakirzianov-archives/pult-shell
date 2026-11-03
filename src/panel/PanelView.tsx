@@ -21,6 +21,7 @@ import { type ProjectDraft, projectDrafts, threadsWithUnsentMessages } from "./d
 import { ExplorerShelf } from "./ExplorerShelf.tsx";
 import { EXPANDED_KEYS, selectionSnapshot, showingSettled } from "./jump.ts";
 import { JumpHint } from "./JumpHint.tsx";
+import { LimitsShelf } from "./LimitsShelf.tsx";
 import { draftCards as draftCardsOf, draftKey, keyOf, SETTLED_TAIL_INITIAL_COUNT, SETTLED_TAIL_PAGE_COUNT, settledTail } from "./order.ts";
 
 function run(command: string, ...args: unknown[]): void {
@@ -88,7 +89,8 @@ function subagentsByRoot(threads: ReadonlyArray<ShellThread>, activities: Map<st
  * expanded one. The Explorer shelf comes first (`ExplorerShelf.tsx`), and
  * Ready's first cards are the projects' drafts of new threads that hold
  * something (`drafts.ts`), newest first, and the selected draft. Cmd+1 to
- * Cmd+9 jump to its rows in this order (`order.ts`, `jump.ts`).
+ * Cmd+9 jump to its rows in this order (`order.ts`, `jump.ts`). The Limits
+ * shelf comes last (`LimitsShelf.tsx`), its rows no jump targets.
  */
 export function PanelView() {
   const state = useSyncExternalStore(subscribeToThreads, threadsSnapshot);
@@ -181,6 +183,7 @@ export function PanelView() {
             <SettledTail threads={settled} shelf={state.settled} selection={selectedCard} render={card} />
           </Shelf>
         ) : null}
+        <LimitsShelf now={now} />
       </ul>
     </div>
   );
