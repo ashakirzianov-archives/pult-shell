@@ -55,7 +55,7 @@ import { type Change, type Checkout, checkoutKey, checkoutName, checkoutsOf, sho
 import { actionStarted, COMMIT_STARTED, commitFailure, commitPlaceholder, type CommitProgress, commitProgress } from "./commit.ts";
 import { type ChangeType, patchFiles } from "./patch.ts";
 import { changesServer } from "./server.ts";
-import { hasSync, pullFailure, SYNC_INTERVAL_MS, syncAction, syncState, type SyncState, syncSteps, syncTitle, syncTooltip } from "./sync.ts";
+import { afterStep, hasSync, pullFailure, SYNC_INTERVAL_MS, syncAction, syncState, type SyncState, syncSteps, syncTitle, syncTooltip } from "./sync.ts";
 
 /** The scheme of a change's two sides, served by the view's content provider from the server's file contents RPC. */
 const DIFF_SCHEME = "pult-diff";
@@ -842,6 +842,7 @@ class ChangesView {
     const name = this.nameOf(entry);
     try {
       const result = await changesServer(entry.checkout.environmentId).pull(entry.checkout.root);
+      this.stepped(entry, "pull");
       if (result.status === "skipped_up_to_date") this.services.notifications.info(`Pult: ${name} is up to date.`);
       return true;
     } catch (error) {
@@ -876,11 +877,29 @@ class ChangesView {
           progressed(latest);
         },
       );
+      if (latest.result?.commit.status === "created") this.stepped(entry, "commit");
+      if (latest.result?.push.status === "pushed") this.stepped(entry, "push");
       return latest;
     } catch (error) {
       console.error(`[pult-shell] the ${action} failed`, error);
       throw new ActionFailed(commitFailure(latest, error));
     }
+  }
+
+  /**
+   * The button as a step left the checkout, at once: its counts, and after a
+   * commit, which takes the whole working tree, no uncommitted changes; the
+   * reads after the action confirm them, and a status read already under way
+   * is dropped.
+   */
+  private stepped(entry: Entry, step: "commit" | "push" | "pull"): void {
+    entry.sync = afterStep(entry.sync, step);
+    entry.syncGeneration += 1;
+    if (step === "commit" && entry.shown?.kind === "working-tree") {
+      entry.shown = undefined;
+      entry.version += 1;
+    }
+    this.render();
   }
 
   private nameOf(entry: Entry): string {

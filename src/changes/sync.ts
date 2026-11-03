@@ -65,6 +65,23 @@ export function syncSteps(state: SyncState): ReadonlyArray<"pull" | "push"> {
   return [...(state.behind > 0 ? (["pull"] as const) : []), ...(state.ahead > 0 ? (["push"] as const) : [])];
 }
 
+/**
+ * The state after a step went through, ahead of the status read that
+ * confirms it, which fetches and so comes a moment later: a commit one more
+ * ahead, a push none ahead with an upstream, a pull none behind.
+ */
+export function afterStep(state: SyncState | undefined, step: "commit" | "push" | "pull"): SyncState | undefined {
+  if (state === undefined) return undefined;
+  switch (step) {
+    case "commit":
+      return state.hasUpstream ? { ...state, ahead: state.ahead + 1 } : state;
+    case "push":
+      return { ...state, hasUpstream: true, ahead: 0 };
+    case "pull":
+      return { ...state, behind: 0 };
+  }
+}
+
 /** Why a pull failed: a branch both ahead and behind cannot fast-forward, which the server's message does not say. */
 export function pullFailure(state: SyncState | undefined, message: string): string {
   if (state !== undefined && state.ahead > 0 && state.behind > 0) {

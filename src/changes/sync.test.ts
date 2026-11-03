@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import { pullFailure, syncAction, syncSteps, syncTitle, syncTooltip } from "./sync.ts";
+import { afterStep, pullFailure, syncAction, syncSteps, syncTitle, syncTooltip } from "./sync.ts";
 
 const state = (ahead: number, behind: number, hasUpstream = true, branch: string | null = "main") => ({ branch, hasUpstream, ahead, behind });
 
@@ -42,6 +42,14 @@ describe("sync", () => {
     assert.equal(syncTitle("sync", 2, 0), "$(sync) Sync Changes 2$(arrow-up)");
     assert.equal(syncTitle("diverged", 41, 1234), "$(git-compare) Diverged 1234$(arrow-down) 41$(arrow-up)");
     assert.equal(syncTooltip(2, 1), "Pull 1 commit, then push 2 commits");
+  });
+
+  test("counts what a step did before the status read confirms it", () => {
+    assert.deepEqual(afterStep(state(1, 2), "pull"), state(1, 0));
+    assert.deepEqual(afterStep(state(1, 0), "push"), state(0, 0));
+    assert.deepEqual(afterStep(state(0, 0, false, "feat"), "push"), state(0, 0, true, "feat"));
+    assert.deepEqual(afterStep(state(1, 0), "commit"), state(2, 0));
+    assert.deepEqual(afterStep(state(0, 0, false, "feat"), "commit"), state(0, 0, false, "feat"));
   });
 
   test("names a diverged branch as the reason a pull failed", () => {
