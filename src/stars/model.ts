@@ -22,7 +22,7 @@ import {
   withRecordFields,
 } from "./record.ts";
 import { starEnabled, starSettingKnown } from "./settings.ts";
-import { isTranscriptName, transcriptsFolder } from "./transcript.ts";
+import { isTranscriptName, transcriptHead, transcriptsFolder } from "./transcript.ts";
 import {
   creationTarget,
   findStarOfProject,
@@ -102,6 +102,26 @@ async function recordAt(server: WorkspaceServer, root: string): Promise<"absent"
   return parseRecord(file.contents) === undefined ? "other" : "star";
 }
 
+/** When each transcript read ended, by its front matter, by environment, home and name: read once per page session, and again once the page rewrites it. */
+const transcriptEnds = new Map<string, string>();
+const transcriptKey = (environmentId: string, root: string, name: string) => JSON.stringify([environmentId, root, name]);
+
+/** When the transcript `name` of the home at `root` ended, by its front matter; undefined where it says none or cannot be read. */
+async function transcriptEnd(server: WorkspaceServer, environmentId: string, root: string, name: string): Promise<string | undefined> {
+  const key = transcriptKey(environmentId, root, name);
+  const known = transcriptEnds.get(key);
+  if (known !== undefined) return known;
+  try {
+    const file = await server.readFile({ cwd: root, relativePath: `${transcriptsFolder(environmentId)}/${name}` });
+    const ended = transcriptHead(file.contents)?.ended;
+    if (ended !== undefined) transcriptEnds.set(key, ended);
+    return ended;
+  } catch (error) {
+    console.warn(`[pult-shell] could not read when the Star's conversation ${name} ended: ${errorMessage(error)}`);
+    return undefined;
+  }
+}
+
 /**
  * The Stars' folders under the environment's home: each folder of
  * `~/.pult/stars` whose `AGENTS.md` carries a record, null while there is
@@ -123,7 +143,9 @@ async function readFolders(server: WorkspaceServer, environmentId: string, home:
           .flatMap((entry) => (entry.kind === "file" ? [lastSegment(entry.path)] : []))
           .filter(isTranscriptName)
           .toSorted();
-        return [{ environmentId, root, record, transcripts }];
+        const newest = transcripts.at(-1);
+        const newestEnded = newest === undefined ? undefined : await transcriptEnd(server, environmentId, root, newest);
+        return [{ environmentId, root, record, transcripts, ...(newestEnded === undefined ? {} : { newestEnded }) }];
       }),
   );
   for (const result of results) {
@@ -501,6 +523,8 @@ export function starById(starId: string): Star | undefined {
 export const createStar = (environmentId: string) => model.create(environmentId);
 /** Reads the environment's Stars' folders again: after the page wrote a transcript, which a watch may tell late or not at all. */
 export const rereadStars = (environmentId: string) => model.read(environmentId);
+/** Forgets when a transcript ended, before its rewrite is read. */
+export const forgetTranscriptEnd = (environmentId: string, root: string, name: string) => transcriptEnds.delete(transcriptKey(environmentId, root, name));
 export const canCreateStarOn = (environmentId: string) => model.canCreateOn(environmentId);
 export const setStarFields = (starId: string, changes: Partial<Pick<StarRecord, "name" | "tint">>) => model.setFields(starId, changes);
 

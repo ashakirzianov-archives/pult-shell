@@ -56,7 +56,7 @@ describe("starsOf", () => {
     assert.equal(starsOf([folder("a", "one")], projects, [thread("a", "t", "2026-11-01T00:00:00.000Z", { working: true })])[0]?.state, "working");
   });
 
-  test("has slept since its last conversation's end, else its newest transcript's start, else its creation", () => {
+  test("has slept since its last conversation's end, else its newest transcript's end or else start, else its creation", () => {
     const projects = [project("a", "star-project")];
     const threads = [
       thread("a", "older-ended-later", "2026-11-01T00:00:00.000Z", { settled: true, settledAt: "2026-11-03T09:00:00.000Z" }),
@@ -64,6 +64,8 @@ describe("starsOf", () => {
     ];
     const [ended] = starsOf([folder("a", "one", undefined, names(2))], projects, threads);
     assert.equal(ended && asleepSince(ended), "2026-11-03T09:00:00.000Z");
+    const [transcribed] = starsOf([{ ...folder("a", "one", undefined, names(2)), newestEnded: "2026-11-02T11:30:00.000Z" }], projects, []);
+    assert.equal(transcribed && asleepSince(transcribed), "2026-11-02T11:30:00.000Z");
     const [listed] = starsOf([folder("a", "one", undefined, names(2))], projects, []);
     assert.equal(listed && asleepSince(listed), "2026-11-02T10:00:00.000Z");
     const [fresh] = starsOf([folder("a", "one")], projects, []);

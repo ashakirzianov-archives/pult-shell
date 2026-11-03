@@ -10,7 +10,7 @@ import { settleQuietly } from "../threads/park.ts";
 import { scopedKey, type ShellThread, threadStore } from "../threads/store.ts";
 import { refreshTranscript } from "./foldState.ts";
 import { readWholeProjection } from "./history.ts";
-import { rereadStars, starStore } from "./model.ts";
+import { forgetTranscriptEnd, rereadStars, starStore } from "./model.ts";
 import { starEnabled, starSettingKnown } from "./settings.ts";
 import { asleepBy, type Wakefulness, wakefulness } from "./sleep.ts";
 import { conversationsOf, type StarHome } from "./stars.ts";
@@ -264,6 +264,7 @@ class StarConversations {
     if (present && !existing.truncated && existing.contents === contents) return whole;
     await server.writeFile({ cwd: home.root, relativePath, contents });
     refreshTranscript(home.environmentId, home.root, name);
+    forgetTranscriptEnd(home.environmentId, home.root, name);
     await rereadStars(home.environmentId);
     return whole;
   }

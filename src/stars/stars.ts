@@ -15,6 +15,8 @@ export interface StarFolder {
   readonly record: StarRecord;
   /** The transcripts' file names in its `conversations/<environmentId>/`, its own environment's, oldest first (`transcript.ts`). */
   readonly transcripts: ReadonlyArray<string>;
+  /** When the newest of them ended, by its front matter, where the page could read it. */
+  readonly newestEnded?: string;
 }
 
 /** A Star's folder on one environment, and its project there, null until the page adopts it. */
@@ -23,6 +25,7 @@ export interface StarHome {
   readonly root: string;
   readonly projectId: string | null;
   readonly transcripts: ReadonlyArray<string>;
+  readonly newestEnded?: string;
 }
 
 /** What a Star reads of a thread of its projects. */
@@ -50,7 +53,8 @@ export interface Star<Thread extends StarThread = ShellThread> {
   /**
    * When its last conversation ended, its latest settlement, else, for one
    * the page's threads no longer hold, when its newest transcript's
-   * conversation started; null for a Star that has had none.
+   * conversation ended, by the transcript, or where that could not be read
+   * when it started; null for a Star that has had none.
    */
   readonly lastEnded: string | null;
   readonly state: StarState;
@@ -103,13 +107,14 @@ export function starsOf<Thread extends StarThread>(
       root: folder.root,
       projectId: projectAt(projects, folder.environmentId, folder.root)?.id ?? null,
       transcripts: folder.transcripts,
+      ...(folder.newestEnded === undefined ? {} : { newestEnded: folder.newestEnded }),
     });
   }
   return [...byId.values()].map(({ record, homes }) => {
     const roots = conversationsOf(homes, threads);
     const current = roots.find((thread) => !thread.settled) ?? null;
     const ended = latestOf(roots.flatMap((thread) => (thread.settled && thread.settledAt !== null ? [thread.settledAt] : [])));
-    const started = latestOf(homes.flatMap((home) => home.transcripts.flatMap((name) => transcriptStart(name) ?? [])));
+    const transcribed = latestOf(homes.flatMap((home) => home.newestEnded ?? transcriptStart(home.transcripts.at(-1) ?? "") ?? []));
     return {
       id: record.id,
       name: record.name,
@@ -118,7 +123,7 @@ export function starsOf<Thread extends StarThread>(
       homes,
       current,
       latest: roots[0] ?? null,
-      lastEnded: ended ?? started,
+      lastEnded: ended ?? transcribed,
       state: current === null ? "asleep" : current.working ? "working" : "awake",
     };
   });
