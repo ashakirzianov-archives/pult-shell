@@ -51,6 +51,15 @@ export function environmentName(environment: ShellEnvironment, environments: Rea
   return shared && URL.canParse(environment.httpBaseUrl) ? new URL(environment.httpBaseUrl).host : environment.label;
 }
 
+/**
+ * What the page's sessions subscribe to of each server's config: the
+ * environment's themes, the usage limit hubs and the /usage-limits command.
+ * A follow of the config (`src/limits/model.ts`) passes these same options,
+ * since a session replays its own subscription only on an equal input and
+ * opens a second one on the socket otherwise.
+ */
+export const SERVER_CONFIG_OPTIONS = { environmentThemes: true, usageLimitSources: true, usageLimitsCommand: true } as const;
+
 /** An environment the page connects to after a reload, with its bearer, in the workbench's secret storage. */
 const Saved = Schema.Struct({ profile: BearerConnectionProfile, token: Schema.String });
 type Saved = typeof Saved.Type;
@@ -104,7 +113,7 @@ class ShellConnection {
   private readonly listeners = new Set<() => void>();
   readonly runtime = ManagedRuntime.make(
     Layer.mergeAll(
-      Connection.layerWithOptions({ environmentThemes: true, usageLimitSources: true, usageLimitsCommand: true }),
+      Connection.layerWithOptions(SERVER_CONFIG_OPTIONS),
       // The shell snapshot's HTTP load, for the thread model (`src/threads/model.ts`).
       ShellSnapshotLoader.layer,
     ).pipe(Layer.provideMerge(platformLayer(SubscriptionRef.changes(this.registrations)))),
