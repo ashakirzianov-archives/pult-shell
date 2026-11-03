@@ -19,6 +19,7 @@ import { BackgroundThreadContext } from "../t3/src/components/chat/backgroundThr
 import { ComposerControlsSlot } from "../t3/src/components/chat/ComposerFooterControls";
 import { ConfirmDialogHost } from "../t3/src/components/ConfirmDialogHost";
 import { CustomSnoozeDialogHost } from "../t3/src/components/CustomSnoozeDialog";
+import { TimelineHeaderSlot } from "../t3/src/components/chat/TimelineHeaderSlot";
 import { SidebarProvider } from "../t3/src/components/ui/sidebar";
 import { AnchoredToastProvider, ToastProvider, toastManager } from "../t3/src/components/ui/toast";
 import { type DraftId, useComposerDraftStore } from "../t3/src/composerDraftStore";
@@ -273,6 +274,11 @@ export interface MountedView {
   readonly bar: HTMLElement;
 }
 
+/** What the shell adds to a pane's view: an element of its own at the timeline's top, inside its scroller (a Star's fold). */
+export interface MountOptions {
+  readonly timelineHeader?: HTMLElement;
+}
+
 /**
  * Mounts the view above the pane's composer bar: the thread's settings
  * (model, reasoning, mode, attachments, the context window, a draft's
@@ -285,6 +291,7 @@ function mountView(
   target: ViewTarget,
   onPromoted: (environmentId: string, threadId: string) => void,
   composerOnly = false,
+  options: MountOptions = {},
 ): MountedView {
   const mount = makeMount(target, onPromoted);
   const router = makeThreadRouter({
@@ -304,7 +311,9 @@ function mountView(
     <StrictMode>
       <AppAtomRegistryProvider>
         <ComposerControlsSlot value={bar}>
-          <RouterProvider router={router} />
+          <TimelineHeaderSlot value={options.timelineHeader ?? null}>
+            <RouterProvider router={router} />
+          </TimelineHeaderSlot>
         </ComposerControlsSlot>
       </AppAtomRegistryProvider>
     </StrictMode>,
@@ -320,8 +329,13 @@ function mountView(
 }
 
 /** Renders the thread's turns and composer, on its environment, into `element` until disposed. */
-export function mountThreadView(element: HTMLElement, environmentId: string, threadId: string): MountedView {
-  return mountView(element, { kind: "thread", environmentId, threadId }, () => {});
+export function mountThreadView(
+  element: HTMLElement,
+  environmentId: string,
+  threadId: string,
+  options: MountOptions = {},
+): MountedView {
+  return mountView(element, { kind: "thread", environmentId, threadId }, () => {}, false, options);
 }
 
 /**
@@ -336,8 +350,9 @@ export function mountDraftView(
   environmentId: string,
   projectId: string,
   onPromoted: (environmentId: string, threadId: string) => void,
+  options: MountOptions = {},
 ): MountedView {
-  return mountView(element, { kind: "draft", environmentId, projectId }, onPromoted);
+  return mountView(element, { kind: "draft", environmentId, projectId }, onPromoted, false, options);
 }
 
 /**

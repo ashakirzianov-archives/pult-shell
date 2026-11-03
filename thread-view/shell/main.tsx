@@ -15,15 +15,22 @@ import {
 } from "../t3/src/hooks/useTheme";
 import { setThreadViewHost, type ThreadViewHost } from "./host.ts";
 import { routeRightPanel } from "./rightPanel.ts";
-import { type MountedView, mountComposerView, mountDraftView, mountThreadView, type ViewTarget } from "./ThreadView.tsx";
+import {
+  type MountedView,
+  type MountOptions,
+  mountComposerView,
+  mountDraftView,
+  mountThreadView,
+  type ViewTarget,
+} from "./ThreadView.tsx";
 
 export type { ThreadViewHost, TurnCheckpoints } from "./host.ts";
 export type { ShellConnectionServices } from "./connectionRuntime.ts";
-export type { MountedView, ViewTarget } from "./ThreadView.tsx";
+export type { MountedView, MountOptions, ViewTarget } from "./ThreadView.tsx";
 
 export interface ThreadViewMounts {
   /** The thread's turns and composer, on its environment. */
-  mount(element: HTMLElement, environmentId: string, threadId: string): MountedView;
+  mount(element: HTMLElement, environmentId: string, threadId: string, options?: MountOptions): MountedView;
   /**
    * The project's draft of a new thread, upstream's composer, which stays
    * mounted as the thread it creates and names it to `onPromoted`, with the
@@ -34,6 +41,7 @@ export interface ThreadViewMounts {
     environmentId: string,
     projectId: string,
     onPromoted: (environmentId: string, threadId: string) => void,
+    options?: MountOptions,
   ): MountedView;
   /** The composer alone of a thread or a project's draft, for the strip under a file. */
   mountComposer(element: HTMLElement, target: ViewTarget): MountedView;

@@ -2,6 +2,7 @@ import { AudioPreviewUnmountContext } from "../files/AudioPreview";
 import { ThreadFindTimelineContext } from "./ThreadFindProvider";
 import { MarkdownFindContext } from "./markdownFindContext";
 import { useChatCanvas } from "./ChatCanvasContext";
+import { TimelineHeaderSlotOutlet } from "./TimelineHeaderSlot";
 import { WorkLogBlock } from "./WorkLog";
 import type { WorktreeSetupSnapshot } from "@t3tools/contracts";
 import { deriveTimelineMinimapItems } from "./timelineMinimapItems";
@@ -1086,6 +1087,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   const listHeader = (
     <>
       {parentThreadLink === null ? listHeaderLeadingContent : null}
+      <TimelineHeaderSlotOutlet />
       {historyControls ? <TimelineHistoryControl {...historyControls} /> : null}
       {parentThreadLink !== null ? listHeaderLeadingContent : null}
     </>
@@ -1230,6 +1232,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     return (
       <>
         {activityAnnouncer}
+        <TimelineHeaderSlotOutlet className="absolute inset-x-0 top-0 pt-3 sm:pt-4" />
         <div
           className="flex h-full items-center justify-center ps-(--chat-lane-inset-start) pe-(--chat-lane-inset-end)"
           style={{ paddingBottom: emptyPlaceholderInset }}
