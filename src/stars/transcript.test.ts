@@ -16,7 +16,7 @@ import {
 import * as DateTime from "effect/DateTime";
 
 import { v2Projection } from "../../vendor/t3code/packages/client-runtime/src/state/orchestrationV2TestFixtures.ts";
-import { formatTranscript, parseTranscript, type TranscriptInput, transcriptEnded, transcriptName, transcriptStart, transcriptsFolder } from "./transcript.ts";
+import { formatTranscript, parseTranscript, type TranscriptInput, transcriptHead, transcriptName, transcriptStart, transcriptsFolder } from "./transcript.ts";
 
 const at = (iso: string) => DateTime.makeUnsafe(iso);
 const threadId = ThreadId.make("thread-star");
@@ -163,7 +163,14 @@ describe("parseTranscript", () => {
       { kind: "tool", at: "2026-11-03T14:02:15Z", text: "Ran: cat memory/week.md" },
       { kind: "star", at: "2026-11-03T14:02:30Z", text: "Three things.\n\n### User · 2026-01-01T00:00:00Z\nquoted" },
     ]);
-    assert.equal(transcriptEnded(text), "2026-11-03T14:32:40.000Z");
+    assert.deepEqual(transcriptHead(text), { ended: "2026-11-03T14:32:40.000Z", partial: false });
     assert.equal(parseTranscript("no front matter"), undefined);
+  });
+
+  test("a transcript of a window of the latest turns says it is partial, and reads back so", () => {
+    const text = formatTranscript(conversation(items, messages), "MacBook", { partial: true }) ?? "";
+    assert.match(text, /^turns: 1\npartial: true\n---\n/m);
+    assert.equal(parseTranscript(text)?.partial, true);
+    assert.deepEqual(transcriptHead(text), { ended: "2026-11-03T14:32:40.000Z", partial: true });
   });
 });

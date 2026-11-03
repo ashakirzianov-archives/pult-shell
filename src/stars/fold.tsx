@@ -72,6 +72,7 @@ function Conversation({ home, name, environmentName }: { home: StarHome; name: s
   const { transcript, truncated } = reading;
   return (
     <>
+      {transcript.partial ? <p className="pult-star-fold-note">The start of this conversation is not in its transcript, written from its latest turns alone.</p> : null}
       <TranscriptEntries entries={transcript.entries} environmentId={home.environmentId} cwd={home.root} />
       {truncated ? <p className="pult-star-fold-note">The rest of this conversation is in its file, {name}.</p> : null}
       <ConversationDivider label={`Fell asleep ${clock(transcript.ended)}`.trim()} detail={environmentName} />

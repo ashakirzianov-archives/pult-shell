@@ -7,11 +7,12 @@ import { threadsWithUnsentMessages } from "../panel/drafts.ts";
 import { settleQuietly } from "../threads/park.ts";
 import { scopedKey, type ShellThread, threadStore } from "../threads/store.ts";
 import { refreshTranscript } from "./foldState.ts";
+import { readWholeProjection } from "./history.ts";
 import { rereadStars, starStore } from "./model.ts";
 import { starEnabled, starSettingKnown } from "./settings.ts";
 import { asleepBy, type Wakefulness, wakefulness } from "./sleep.ts";
 import { conversationsOf, type StarHome } from "./stars.ts";
-import { formatTranscript, transcriptEnded, transcriptName, transcriptsFolder } from "./transcript.ts";
+import { formatTranscript, transcriptHead, transcriptName, transcriptsFolder } from "./transcript.ts";
 
 /** The longest the page waits between looks at a deadline: a timer's clock stops while the machine sleeps, as the thread model's wake timer knows. */
 const CLOCK_CHECK_MS = 60_000;
@@ -37,8 +38,26 @@ function errorMessage(error: unknown): string {
   return String(error);
 }
 
+/** The conversation's projection over the socket: a window of its latest turns, whole in its runs, subagents and pending requests, which the sleep rule reads (`sleep.ts`). */
 const readProjection = (thread: Pick<ShellThread, "environmentId" | "id">) =>
   connection.run(thread.environmentId, request(ORCHESTRATION_V2_WS_METHODS.getThreadProjection, { threadId: ThreadId.make(thread.id) }));
+
+/**
+ * The conversation's whole projection, for its transcript, from its
+ * environment's HTTP API (`history.ts`); where that cannot be read, a proxy
+ * refusing `/api` while the socket works, the socket's window of its latest
+ * turns, partial.
+ */
+async function readHistory(thread: Pick<ShellThread, "environmentId" | "id">) {
+  const credential = connection.credential(thread.environmentId);
+  try {
+    if (credential === undefined) throw new Error("The page holds no bearer for its environment.");
+    return { projection: await readWholeProjection(credential, thread.id), partial: false };
+  } catch (error) {
+    console.warn(`[pult-shell] could not read the whole of the Star's conversation ${thread.id}, its transcript from its latest turns alone: ${errorMessage(error)}`);
+    return { projection: await readProjection(thread), partial: true };
+  }
+}
 
 /** What of a shell row can change a conversation's wakefulness: its projection is read again when it changes. */
 const stampOf = (thread: ShellThread) => JSON.stringify([thread.updatedAt, thread.latestRun, thread.canSnooze]);
@@ -206,15 +225,17 @@ class StarConversations {
     return undefined;
   }
 
-  /** Writes the transcript where it is missing or ended otherwise, and only when its text differs from the file's. */
+  /** Writes the transcript where it is missing, ended otherwise or partial, and only when its text differs from the file's. */
   private async write(home: StarHome, thread: ShellThread, settledAt: string): Promise<void> {
     const name = transcriptName(thread.createdAt, thread.id);
     const relativePath = `${transcriptsFolder(home.environmentId)}/${name}`;
     const server = environmentServer(home.environmentId);
     const existing = home.transcripts.includes(name) ? await server.readFile({ cwd: home.root, relativePath, allowMissing: true }) : undefined;
     const present = existing !== undefined && existing.exists !== false;
-    if (present && sameInstant(transcriptEnded(existing.contents), settledAt)) return;
-    const contents = formatTranscript(await readProjection(thread), threadStore.environment(home.environmentId)?.name ?? home.environmentId);
+    const head = present ? transcriptHead(existing.contents) : undefined;
+    if (head !== undefined && sameInstant(head.ended, settledAt) && !head.partial) return;
+    const { projection, partial } = await readHistory(thread);
+    const contents = formatTranscript(projection, threadStore.environment(home.environmentId)?.name ?? home.environmentId, { partial });
     // Un-settled since: its next settlement writes it.
     if (contents === undefined) return;
     if (present && !existing.truncated && existing.contents === contents) return;

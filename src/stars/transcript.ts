@@ -29,7 +29,9 @@
 // Every user and assistant message under a heading with its time, each tool
 // call on its heading's one line; a message's own line that reads as such a
 // heading is written with one more backslash before it, and read back
-// without.
+// without. A transcript written from a window of the conversation's latest
+// turns, where the page could not read the whole of it, says so in its
+// front matter (`partial: true`), its turns those of the window.
 import {
   idleCompactionOf,
   type OrchestrationV2ThreadProjection,
@@ -116,9 +118,10 @@ function toolLine(item: Item): string | undefined {
  * title and its turns, the user's messages), then its messages and tool
  * calls in the timeline's order, the agent's own alone, not its subagents';
  * T3 Code's own idle compactions left out. Undefined while the thread is not
- * settled, since its end is its settlement.
+ * settled, since its end is its settlement. `partial` for a projection that
+ * is a window of the latest turns, which the front matter then says.
  */
-export function formatTranscript(projection: TranscriptInput, environmentName: string): string | undefined {
+export function formatTranscript(projection: TranscriptInput, environmentName: string, { partial = false } = {}): string | undefined {
   const { thread } = projection;
   if (thread.settledOverride !== "settled" || thread.settledAt === null) return undefined;
   const messages = new Map(projection.messages.map((message) => [message.id, message]));
@@ -160,6 +163,7 @@ export function formatTranscript(projection: TranscriptInput, environmentName: s
     `environment: ${quoted(environmentName)}`,
     `title: ${quoted(thread.title)}`,
     `turns: ${turns}`,
+    ...(partial ? ["partial: true"] : []),
   ];
   return `---\n${front.join("\n")}\n---\n${sections.map((section) => `\n${section}`).join("")}`;
 }
@@ -175,12 +179,15 @@ export interface Transcript {
   readonly ended: string;
   readonly environment: string;
   readonly title: string;
+  /** Whether it holds only a window of the conversation's latest turns. */
+  readonly partial: boolean;
   readonly entries: ReadonlyArray<TranscriptEntry>;
 }
 
-/** When a transcript's conversation ended, by its front matter; undefined for a file of none. */
-export function transcriptEnded(text: string): string | undefined {
-  return readFrontMatter(text)?.fields.get("ended") || undefined;
+/** What a transcript's front matter says of it: when its conversation ended, and whether it is partial; undefined for a file of none. */
+export function transcriptHead(text: string): { readonly ended: string | undefined; readonly partial: boolean } | undefined {
+  const fields = readFrontMatter(text)?.fields;
+  return fields && { ended: fields.get("ended") || undefined, partial: fields.get("partial") === "true" };
 }
 
 /** A transcript read back, its entries in order; undefined for a file with no front matter. */
@@ -213,6 +220,7 @@ export function parseTranscript(text: string): Transcript | undefined {
     ended: fields.get("ended") ?? "",
     environment: fields.get("environment") ?? "",
     title: fields.get("title") ?? "",
+    partial: fields.get("partial") === "true",
     entries,
   };
 }
