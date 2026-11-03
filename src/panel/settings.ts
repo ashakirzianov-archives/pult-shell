@@ -92,7 +92,7 @@ export function registerPanelSettings(): void {
   }
 }
 
-/** Reads the settings into their stores and the context key, now and on each change. Called once the workbench is up. */
+/** Reads the settings into their stores and the context key, as soon as the services are up and on each change. Called before the workbench initialises. */
 export async function startPanelSettings(): Promise<void> {
   const [configuration, contextKeys] = await Promise.all([getService(IConfigurationService), getService(IContextKeyService)]);
   const settledHidden = SettledHiddenContext.bindTo(contextKeys);

@@ -117,13 +117,16 @@ const options: IWorkbenchConstructionOptions = {
   developmentOptions: { logLevel: 2 },
 };
 
+// Read as soon as the configuration service is up, so a hidden Settled shelf never shows while the workbench starts.
+const panelSettings = startPanelSettings();
+
 await initialize(workbenchServices(), container, options, {
   userHome: Uri.file("/"),
 });
 
 await syncColorScheme();
 await startMode();
-await startPanelSettings();
+await panelSettings;
 await startStatusBar();
 await startComposerStrip();
 await startPanelRows();
