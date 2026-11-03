@@ -39,8 +39,14 @@ import * as DateTime from "effect/DateTime";
 
 import { CONVERSATIONS_DIRECTORY, quoted, readFrontMatter } from "./record.ts";
 
+/** An id as one path segment: kept to what any filesystem takes, and never `.` or `..`, so it can name nothing above its folder. */
+function segment(id: string): string {
+  const safe = id.replace(/[^A-Za-z0-9._-]/g, "_");
+  return /^\.*$/.test(safe) ? `_${safe}` : safe;
+}
+
 /** The folder of a Star's home holding the transcripts of the conversations run on `environmentId`, relative to the home. */
-export const transcriptsFolder = (environmentId: string) => `${CONVERSATIONS_DIRECTORY}/${environmentId}`;
+export const transcriptsFolder = (environmentId: string) => `${CONVERSATIONS_DIRECTORY}/${segment(environmentId)}`;
 
 const STAMP = /^(\d{4}-\d\d-\d\d)T(\d\d):(\d\d):(\d\d)/;
 
@@ -51,7 +57,7 @@ const STAMP = /^(\d{4}-\d\d-\d\d)T(\d\d):(\d\d):(\d\d)/;
  */
 export function transcriptName(createdAt: string, threadId: string): string {
   const [, day, hours, minutes, seconds] = STAMP.exec(new Date(createdAt).toISOString()) ?? [];
-  return `${day}T${hours}-${minutes}-${seconds}Z-${threadId.replace(/[^A-Za-z0-9._-]/g, "_")}.md`;
+  return `${day}T${hours}-${minutes}-${seconds}Z-${segment(threadId)}.md`;
 }
 
 /** When the conversation a transcript's file name names started, as an ISO time; undefined for a name of none. */

@@ -16,7 +16,7 @@ import {
 import * as DateTime from "effect/DateTime";
 
 import { v2Projection } from "../../vendor/t3code/packages/client-runtime/src/state/orchestrationV2TestFixtures.ts";
-import { formatTranscript, parseTranscript, type TranscriptInput, transcriptEnded, transcriptName, transcriptStart } from "./transcript.ts";
+import { formatTranscript, parseTranscript, type TranscriptInput, transcriptEnded, transcriptName, transcriptStart, transcriptsFolder } from "./transcript.ts";
 
 const at = (iso: string) => DateTime.makeUnsafe(iso);
 const threadId = ThreadId.make("thread-star");
@@ -106,6 +106,15 @@ describe("transcriptName", () => {
     assert.equal(transcriptName("2026-11-03T16:02:11.250+02:00", "thread/1"), "2026-11-03T14-02-11Z-thread_1.md");
     assert.equal(transcriptStart("2026-11-03T14-02-11Z-thread_1.md"), "2026-11-03T14:02:11.000Z");
     assert.equal(transcriptStart("notes.md"), undefined);
+  });
+});
+
+describe("transcriptsFolder", () => {
+  test("names the environment's folder by one segment of its id, which can name nothing above it", () => {
+    assert.equal(transcriptsFolder("env-1"), "conversations/env-1");
+    assert.equal(transcriptsFolder("../../.ssh"), "conversations/.._.._.ssh");
+    assert.equal(transcriptsFolder(".."), "conversations/_..");
+    assert.equal(transcriptsFolder(""), "conversations/_");
   });
 });
 
