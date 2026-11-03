@@ -1,12 +1,16 @@
 import { getService, ICommandService, IContextKeyService } from "@codingame/monaco-vscode-api";
 import { MenuId } from "@codingame/monaco-vscode-api/vscode/vs/platform/actions/common/actions";
 import { IContextMenuService } from "@codingame/monaco-vscode-api/vscode/vs/platform/contextview/browser/contextView.service";
-import { useRef, useSyncExternalStore } from "react";
+import { useRef, useState, useSyncExternalStore } from "react";
 
 import { connection, environmentName, type ShellEnvironment } from "../connection/index.ts";
 import { setUsageLimitsMode, USAGE_LIMITS_MODES, usageLimitsMode } from "../limits/index.ts";
 import { type modeChoice, MODES, setMode } from "../mode.ts";
 import { SETTLED_CHOICES, setSettledShelf, settledShelf } from "../panel/settings.ts";
+import { setStarFields, starStore } from "../stars/model.ts";
+import { TINTS, tintOf } from "../stars/record.ts";
+import { setStarEnabled, starEnabled } from "../stars/settings.ts";
+import { type Star, starName } from "../stars/stars.ts";
 import { COLOR_SCHEMES, type colorSchemeChoice, setColorScheme } from "./colorScheme.ts";
 
 function run(command: string, ...args: unknown[]): void {
@@ -23,6 +27,7 @@ export function SettingsPage({ colorScheme, mode }: { colorScheme: ColorSchemeCh
     <div className="pult-settings">
       <h1 className="pult-settings-title">Settings</h1>
       <EnvironmentsSection />
+      <StarSection />
       <AppearanceSection colorScheme={colorScheme} />
       <PanelSection />
       <ModeSection mode={mode} />
@@ -93,6 +98,125 @@ function EnvironmentsSection() {
         Connect to Environment
       </button>
     </section>
+  );
+}
+
+const SHOW_STAR_CHOICES = [
+  { value: "shown", label: "Shown" },
+  { value: "hidden", label: "Hidden" },
+] as const;
+
+/**
+ * The Star (`src/stars/`): per Star the page holds, its Name and Tint,
+ * written into the record of every home the page holds, Edit Instructions
+ * (its `AGENTS.md` as a tab) and Open Star Folder (the explorer at its
+ * folder); then Show Star (`pult.star.enabled`), which the palette's Show
+ * Star and Hide Star set too: hidden, the left panel shows no Star's card
+ * and Pult creates none, deleting nothing.
+ */
+function StarSection() {
+  const stars = useSyncExternalStore(starStore.subscribe, starStore.get);
+  const enabled = useSyncExternalStore(starEnabled.subscribe, starEnabled.get);
+  return (
+    <section className="pult-settings-section">
+      <h2>Star</h2>
+      {stars.length === 0 ? (
+        <p className="pult-settings-note">
+          {enabled ? "Pult creates your Star once it is connected to an environment." : "Pult creates no Star while it is hidden."}
+        </p>
+      ) : null}
+      {stars.map((star) => (
+        <StarSettings key={star.id} star={star} several={stars.length > 1} />
+      ))}
+      <SegmentedRow
+        label="Show Star"
+        description="Hidden, the left panel shows no Star and Pult creates none; nothing is deleted."
+        choices={SHOW_STAR_CHOICES}
+        current={enabled ? "shown" : "hidden"}
+        onChoose={(choice) => void setStarEnabled(choice === "shown")}
+      />
+    </section>
+  );
+}
+
+function StarSettings({ star, several }: { star: Star; several: boolean }) {
+  const [name, setName] = useState(star.name);
+  const [editing, setEditing] = useState(false);
+  // The record's name, as a write here or a hand edit of the front matter changes it, unless the field is being edited.
+  const shown = editing ? name : star.name;
+  const commit = () => {
+    setEditing(false);
+    if (name.trim() !== star.name) void setStarFields(star.id, { name: name.trim() });
+  };
+  return (
+    <>
+      <div className="pult-settings-row">
+        <div className="pult-settings-row-text">
+          <label className="pult-settings-row-label" htmlFor={`pult-star-name-${star.id}`}>
+            {several ? `Name of ${starName(star)}` : "Name"}
+          </label>
+          <div className="pult-settings-row-description">Empty, your Star is called Star.</div>
+        </div>
+        <input
+          id={`pult-star-name-${star.id}`}
+          className="pult-settings-input"
+          type="text"
+          placeholder="Star"
+          spellCheck
+          value={shown}
+          onFocus={() => {
+            setName(star.name);
+            setEditing(true);
+          }}
+          onChange={(event) => setName(event.target.value)}
+          onBlur={commit}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") event.currentTarget.blur();
+            if (event.key === "Escape") {
+              setName(star.name);
+              setEditing(false);
+              event.currentTarget.blur();
+            }
+          }}
+        />
+      </div>
+      <div className="pult-settings-row">
+        <div className="pult-settings-row-text">
+          <div className="pult-settings-row-label">Tint</div>
+          <div className="pult-settings-row-description">The colour of your Star's light.</div>
+        </div>
+        <div className="pult-settings-swatches" role="radiogroup" aria-label="Tint">
+          {TINTS.map((tint) => (
+            <button
+              key={tint.name}
+              type="button"
+              role="radio"
+              className="pult-settings-swatch"
+              aria-checked={tint.name === tintOf(star.tint).name}
+              title={tint.name[0]?.toUpperCase() + tint.name.slice(1)}
+              style={{ background: `hsl(${tint.hue} 80% 60%)` }}
+              onClick={() => void setStarFields(star.id, { tint: tint.name })}
+            />
+          ))}
+        </div>
+      </div>
+      <div className="pult-settings-row">
+        <div className="pult-settings-row-text">
+          <div className="pult-settings-row-label">Instructions and folder</div>
+          <div className="pult-settings-row-description">
+            Your Star reads its AGENTS.md at the start of every conversation, and keeps its memory in its folder.
+          </div>
+        </div>
+        <div className="pult-settings-row-actions">
+          <button type="button" className="pult-settings-button" onClick={() => run("pult-shell.editStarInstructions", star.id)}>
+            Edit Instructions
+          </button>
+          <button type="button" className="pult-settings-button" onClick={() => run("pult-shell.openStarFolder", star.id)}>
+            Open Star Folder
+          </button>
+        </div>
+      </div>
+    </>
   );
 }
 

@@ -12,6 +12,7 @@ import {
 import { createRoot, type Root } from "react-dom/client";
 
 import { allowNativeScroll } from "../nativeScroll.ts";
+import { allowNativeTextMenu } from "../nativeTextMenu.ts";
 import { modeChoice } from "../mode.ts";
 import { colorSchemeChoice } from "./colorScheme.ts";
 import { SettingsPage } from "./SettingsPage.tsx";
@@ -40,6 +41,8 @@ class SettingsPane extends SimpleEditorPane {
     element.tabIndex = -1;
     // The page is a native scroller.
     allowNativeScroll(element);
+    // The Star's name has the browser's menu, with its spelling suggestions.
+    allowNativeTextMenu(element);
     return element;
   }
 

@@ -163,3 +163,50 @@
   outline: 1px solid var(--vscode-focusBorder);
   outline-offset: -1px;
 }
+
+/* The Star's name, in the workbench's input colours. */
+.pult-settings-input {
+  flex-shrink: 0;
+  width: 220px;
+  padding: 4px 8px;
+  border: 1px solid var(--vscode-input-border, var(--vscode-widget-border, transparent));
+  border-radius: 4px;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  font: inherit;
+}
+
+.pult-settings-input::placeholder {
+  color: var(--vscode-input-placeholderForeground);
+}
+
+.pult-settings-input:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+/* The Star's tints, a swatch each, the chosen one ringed. */
+.pult-settings-swatches {
+  display: flex;
+  flex-shrink: 0;
+  gap: 6px;
+}
+
+.pult-settings-swatch {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.pult-settings-swatch[aria-checked="true"] {
+  outline: 2px solid var(--vscode-foreground);
+  outline-offset: 2px;
+}
+
+.pult-settings-swatch:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
