@@ -1232,7 +1232,10 @@ const ConversationTimeline = memo(function ConversationTimeline({
     return (
       <>
         {activityAnnouncer}
-        <TimelineHeaderSlotOutlet className="absolute inset-x-0 top-0 pt-3 sm:pt-4" />
+        <TimelineHeaderSlotOutlet
+          className="absolute inset-x-0 top-0 overflow-y-auto overscroll-y-contain bg-background pt-3 sm:pt-4"
+          style={{ maxHeight: `calc(100% - ${emptyPlaceholderInset}px)` }}
+        />
         <div
           className="flex h-full items-center justify-center ps-(--chat-lane-inset-start) pe-(--chat-lane-inset-end)"
           style={{ paddingBottom: emptyPlaceholderInset }}

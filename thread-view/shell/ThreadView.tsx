@@ -13,6 +13,7 @@ import {
 } from "@t3tools/contracts";
 import { DateTime } from "effect";
 import { type ReactNode, StrictMode, useEffect, useRef, useSyncExternalStore } from "react";
+import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
 
 import { BackgroundThreadContext } from "../t3/src/components/chat/backgroundThread";
@@ -194,7 +195,7 @@ function useTarget(mount: Mount): ViewTarget {
   return useSyncExternalStore(mount.subscribe, mount.target);
 }
 
-function makeRoot(mount: Mount, composerOnly: boolean) {
+function makeRoot(mount: Mount, composerOnly: boolean, header: MountOptions["timelineHeader"]) {
   function NavigationFollower() {
     const router = useRouter();
     useEffect(
@@ -219,6 +220,8 @@ function makeRoot(mount: Mount, composerOnly: boolean) {
             <SidebarProvider defaultOpen={false}>
               <Outlet />
             </SidebarProvider>
+            {/* Into the element the timeline's header places, which keeps it across the list's own remounts. */}
+            {header === undefined ? null : createPortal(header.content, header.element)}
           </AnchoredToastProvider>
         </ToastProvider>
       </BackgroundThreadContext>
@@ -284,13 +287,15 @@ export interface MountedView {
 
 /**
  * What the shell adds to a pane's view, or changes of it: an element of its
- * own at the timeline's top, inside its scroller (a Star's fold); a draft
- * resting with its composer where a thread's sits, without upstream's hero
- * (`draftHero: false`); and the composer's placeholder, live, in place of
- * upstream's (a Star's, which names it).
+ * own at the timeline's top, inside its scroller, and what the view renders
+ * into it, inside the view's own providers and router, so upstream's
+ * components work there (a Star's fold, which renders its transcripts with
+ * upstream's markdown); a draft resting with its composer where a thread's
+ * sits, without upstream's hero (`draftHero: false`); and the composer's
+ * placeholder, live, in place of upstream's (a Star's, which names it).
  */
 export interface MountOptions {
-  readonly timelineHeader?: HTMLElement;
+  readonly timelineHeader?: { readonly element: HTMLElement; readonly content: ReactNode };
   readonly draftHero?: boolean;
   readonly placeholder?: ShellValue<string>;
 }
@@ -311,7 +316,7 @@ function mountView(
 ): MountedView {
   const mount = makeMount(target, onPromoted);
   const router = makeThreadRouter({
-    root: makeRoot(mount, composerOnly),
+    root: makeRoot(mount, composerOnly, options.timelineHeader),
     landing: makeLanding(mount),
     initialPath: mount.home(),
   });
@@ -329,7 +334,7 @@ function mountView(
       <AppAtomRegistryProvider>
         <ComposerControlsSlot value={bar}>
           <ShellComposerOptions value={composerOptions}>
-            <TimelineHeaderSlot value={options.timelineHeader ?? null}>
+            <TimelineHeaderSlot value={options.timelineHeader?.element ?? null}>
               <RouterProvider router={router} />
             </TimelineHeaderSlot>
           </ShellComposerOptions>

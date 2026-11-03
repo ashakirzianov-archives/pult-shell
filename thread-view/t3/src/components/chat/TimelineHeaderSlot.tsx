@@ -1,7 +1,7 @@
 // Pult's, not upstream's (`../../../EDITS.md`): an element the app around
 // the view hands the timeline to show at its top, above the turns, inside
 // the timeline's scroller, so it scrolls with them.
-import { createContext, useContext } from "react";
+import { createContext, type CSSProperties, useContext } from "react";
 
 /** The element the timeline shows at its top; null, as upstream's app leaves it, for none. */
 export const TimelineHeaderSlot = createContext<HTMLElement | null>(null);
@@ -11,11 +11,11 @@ export const TimelineHeaderSlot = createContext<HTMLElement | null>(null);
  * renders it; nothing without one. The element is the app's, moved here as
  * the header mounts, its content the app's to render.
  */
-export function TimelineHeaderSlotOutlet({ className }: { className?: string }) {
+export function TimelineHeaderSlotOutlet({ className, style }: { className?: string; style?: CSSProperties }) {
   const slot = useContext(TimelineHeaderSlot);
   if (slot === null) return null;
   return (
-    <div className={className ? `messages-timeline-row-frame ${className}` : "messages-timeline-row-frame"}>
+    <div className={className ? `messages-timeline-row-frame ${className}` : "messages-timeline-row-frame"} style={style}>
       <div
         className="chat-content-lane"
         ref={(node) => {
