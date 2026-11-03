@@ -42,7 +42,11 @@ const readProjection = (thread: Pick<ShellThread, "environmentId" | "id">) =>
 /** What of a shell row can change a conversation's wakefulness: its projection is read again when it changes. */
 const stampOf = (thread: ShellThread) => JSON.stringify([thread.updatedAt, thread.latestRun, thread.canSnooze]);
 
-const sameInstant = (left: string | undefined, right: string) => left !== undefined && Date.parse(left) === Date.parse(right);
+/** Whether a thread below the conversation works, its subagents' and theirs, as the store has them: a subagent thread's run holds the Star awake as the conversation's own does. */
+const lineageWorks = (thread: ShellThread, threads: ReadonlyArray<ShellThread>) =>
+  threads.some((each) => each.environmentId === thread.environmentId && each.rootId === thread.id && each.id !== thread.id && each.working);
+
+const sameInstant =(left: string | undefined, right: string) => left !== undefined && Date.parse(left) === Date.parse(right);
 
 /**
  * The Stars' conversations, kept by the page (xaxis `pult/issues/star-sleep`):
@@ -93,7 +97,7 @@ class StarConversations {
           if (retry !== undefined) next = Math.min(next, retry);
           continue;
         }
-        if (threadStore.environment(thread.environmentId)?.features.settlement !== true || thread.working) continue;
+        if (threadStore.environment(thread.environmentId)?.features.settlement !== true || thread.working || lineageWorks(thread, threads)) continue;
         open.add(key);
         const stamp = stampOf(thread);
         let evaluation = this.evaluations.get(key);

@@ -6,8 +6,10 @@ import {
   MessageId,
   NodeId,
   type OrchestrationV2ProviderTurn,
+  type OrchestrationV2Subagent,
   type OrchestrationV2Run,
   type OrchestrationV2RuntimeRequest,
+  ProviderDriverKind,
   ProviderInstanceId,
   ProviderThreadId,
   ProviderTurnId,
@@ -73,6 +75,30 @@ function request(status: OrchestrationV2RuntimeRequest["status"]): Orchestration
   };
 }
 
+function subagent(status: OrchestrationV2Subagent["status"]): OrchestrationV2Subagent {
+  return {
+    id: NodeId.make("node-subagent"),
+    threadId: v2Projection.thread.id,
+    runId: null,
+    parentNodeId: NodeId.make("node-parent"),
+    origin: "provider_native",
+    createdBy: "agent",
+    driver: ProviderDriverKind.make("claude"),
+    providerInstanceId: ProviderInstanceId.make("claude"),
+    providerThreadId: null,
+    childThreadId: null,
+    nativeTaskRef: null,
+    prompt: "Look it up",
+    title: null,
+    model: null,
+    status,
+    result: null,
+    startedAt: at("2026-11-03T10:09:00.000Z"),
+    completedAt: null,
+    updatedAt: at("2026-11-03T10:09:00.000Z"),
+  };
+}
+
 const conversation = (overrides: Partial<SleepInput>): SleepInput => ({ ...v2Projection, ...overrides });
 
 describe("wakefulness", () => {
@@ -119,13 +145,43 @@ describe("wakefulness", () => {
     const done = turn("done", "2026-11-03T10:10:00.000Z");
     assert.deepEqual(wakefulness(conversation({ runs: [run("live", "running")], providerTurns: [done] })), { kind: "held", by: "run" });
     assert.deepEqual(wakefulness(conversation({ runs: [run("draining", "waiting")], providerTurns: [done] })), { kind: "held", by: "run" });
-    assert.deepEqual(wakefulness(conversation({ providerTurns: [done, turn("now", null)] })), { kind: "held", by: "run" });
     assert.deepEqual(wakefulness(conversation({ runs: [run("done", "completed", "2026-11-03T10:10:00.000Z"), { ...run("next", "queued"), queueHeld: true }], providerTurns: [done] })), {
       kind: "held",
       by: "queued",
     });
     assert.deepEqual(wakefulness(conversation({ providerTurns: [done], runtimeRequests: [request("pending")] })), { kind: "held", by: "request" });
     assert.equal(wakefulness(conversation({ providerTurns: [done], runtimeRequests: [request("resolved")] })).kind, "deadline");
+  });
+
+  test("holds the conversation awake while a subagent of it works, and not once it is done", () => {
+    const done = turn("done", "2026-11-03T10:10:00.000Z");
+    for (const status of ["pending", "running", "waiting"] as const) {
+      assert.deepEqual(wakefulness(conversation({ providerTurns: [done], subagents: [subagent(status)] })), { kind: "held", by: "subagent" });
+    }
+    assert.deepEqual(wakefulness(conversation({ providerTurns: [done], subagents: [subagent("completed")] })), {
+      kind: "deadline",
+      at: ms("2026-11-03T10:10:00.000Z") + DEFAULT_CACHE_TTL_MS,
+    });
+  });
+
+  test("a provider turn left running after its run ended holds nothing", () => {
+    const state = wakefulness(
+      conversation({
+        runs: [run("ended", "completed", "2026-11-03T10:10:00.000Z")],
+        providerTurns: [turn("done", "2026-11-03T10:10:00.000Z"), turn("stuck", null)],
+      }),
+    );
+    assert.deepEqual(state, { kind: "deadline", at: ms("2026-11-03T10:10:00.000Z") + DEFAULT_CACHE_TTL_MS });
+  });
+
+  test("counts from the un-settlement when the conversation was woken by hand after its last turn", () => {
+    const providerTurns = [turn("done", "2026-11-03T10:10:00.000Z", { ttl: 300_000 })];
+    const woken = { ...v2Projection.thread, unsettledAt: at("2026-11-03T12:00:00.000Z") };
+    assert.deepEqual(wakefulness(conversation({ thread: woken, providerTurns })), { kind: "deadline", at: ms("2026-11-03T12:05:00.000Z") });
+    assert.deepEqual(wakefulness(conversation({ thread: woken })), { kind: "deadline", at: ms("2026-11-03T12:00:00.000Z") + DEFAULT_CACHE_TTL_MS });
+    // An un-settlement before the last turn changes nothing.
+    const earlier = { ...v2Projection.thread, unsettledAt: at("2026-11-03T10:00:00.000Z") };
+    assert.deepEqual(wakefulness(conversation({ thread: earlier, providerTurns })), { kind: "deadline", at: ms("2026-11-03T10:15:00.000Z") });
   });
 });
 
