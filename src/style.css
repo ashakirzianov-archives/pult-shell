@@ -122,6 +122,12 @@ body,
   padding-left: calc(var(--pult-traffic-lights, 0px) + 30px);
 }
 
+/* Source Control's "No changes." (src/changes/view.ts), which the workbench
+   focuses when the view opens empty: no focus ring, as it holds nothing to act on. */
+#workbench\.view\.scm .welcome-view-content:focus {
+  outline: none;
+}
+
 /* What Pult's default mode hides and VS Code mode shows (src/mode.ts puts
    `pult-mode-vscode` on the workbench while that mode is on): rules for what
    no setting or context key turns off. Each one names what it hides. */
