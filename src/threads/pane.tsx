@@ -8,8 +8,8 @@ import {
   SimpleEditorInput,
   SimpleEditorPane,
 } from "@codingame/monaco-vscode-workbench-service-override/common";
-import type { URI } from "@codingame/monaco-vscode-api/vscode/vs/base/common/uri";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { URI } from "@codingame/monaco-vscode-api/vscode/vs/base/common/uri";
+import { type ReactNode, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 import type { MountedView, ThreadViewMounts } from "../../thread-view/shell/main.tsx";
@@ -18,6 +18,11 @@ import { connection } from "../connection/index.ts";
 import { allowNativeScroll } from "../nativeScroll.ts";
 import { allowNativeTextMenu } from "../nativeTextMenu.ts";
 import { isSettingsTab, type SettingsInput } from "../settings/pane.tsx";
+import { starMarkUrl } from "../stars/mark.ts";
+import { starById, starStore } from "../stars/model.ts";
+import { DEFAULT_TINT } from "../stars/record.ts";
+import { starName } from "../stars/stars.ts";
+import { StarContent } from "../stars/tab.tsx";
 import { workbenchColorScheme } from "../theme.ts";
 import { ThreadBarEntries } from "./barEntries.tsx";
 import { openThreadFile, registerOpenThreadFileCommand } from "./files.ts";
@@ -27,11 +32,13 @@ import { isSubagent, type ShellProject, type ShellThread, threadStore } from "./
 const PANE_ID = "pult.shell.threadPane";
 /** The draft tab's input type, which its serialiser is registered under; its pane is the thread's. */
 const DRAFT_TYPE_ID = "pult.shell.draft";
+/** The Star's tab's input type, the same way. */
+const STAR_TYPE_ID = "pult.shell.star";
 
 let started: Promise<ThreadViewMounts> | undefined;
 
 /** What a pane shows, in its environment: a thread, or a project's draft of a new thread. */
-type PaneTarget =
+export type PaneTarget =
   | { readonly kind: "thread"; readonly environmentId: string; readonly threadId: string }
   | { readonly kind: "draft"; readonly environmentId: string; readonly projectId: string };
 
@@ -93,16 +100,22 @@ export function threadView() {
  * that environment, or `generation` changes, and not when only `target`
  * does, which is a draft's promotion: the view mounted for the draft is the
  * new thread's already. A thread's place (`ThreadBarEntries`) joins the
- * view's composer bar.
+ * view's composer bar, or what `barEntries` renders there; `timelineHeader`
+ * is an element of the caller's at the top of the view's timeline, inside
+ * its scroller (a Star's fold, `src/stars/tab.tsx`).
  */
-function ThreadContent({
+export function ThreadContent({
   target,
   generation,
   onPromoted,
+  timelineHeader,
+  barEntries,
 }: {
   target: PaneTarget;
   generation: number;
   onPromoted: (environmentId: string, threadId: string) => void;
+  timelineHeader?: HTMLElement;
+  barEntries?: (bar: HTMLElement) => ReactNode;
 }) {
   const environmentId = useSyncExternalStore(
     (listener) => connection.onDidChange(listener),
@@ -111,8 +124,8 @@ function ThreadContent({
   const element = useRef<HTMLDivElement>(null);
   const [failure, setFailure] = useState<string>();
   const [bar, setBar] = useState<HTMLElement>();
-  const latest = useRef({ target, onPromoted });
-  latest.current = { target, onPromoted };
+  const latest = useRef({ target, onPromoted, timelineHeader });
+  latest.current = { target, onPromoted, timelineHeader };
   useEffect(() => {
     const host = element.current;
     if (environmentId === undefined || host === null) return;
@@ -122,11 +135,16 @@ function ThreadContent({
       (mounts) => {
         if (disposed) return;
         const shown = latest.current.target;
+        const options = latest.current.timelineHeader === undefined ? {} : { timelineHeader: latest.current.timelineHeader };
         view =
           shown.kind === "thread"
-            ? mounts.mount(host, environmentId, shown.threadId)
-            : mounts.mountDraft(host, environmentId, shown.projectId, (promotedIn, threadId) =>
-                latest.current.onPromoted(promotedIn, threadId),
+            ? mounts.mount(host, environmentId, shown.threadId, options)
+            : mounts.mountDraft(
+                host,
+                environmentId,
+                shown.projectId,
+                (promotedIn, threadId) => latest.current.onPromoted(promotedIn, threadId),
+                options,
               );
         setBar(view.bar);
       },
@@ -150,7 +168,9 @@ function ThreadContent({
   return (
     <>
       <div ref={element} className="pult-thread-content" />
-      {bar !== undefined && target.kind === "thread" ? (
+      {bar === undefined ? null : barEntries !== undefined ? (
+        barEntries(bar)
+      ) : target.kind === "thread" ? (
         <ThreadBarEntries bar={bar} environmentId={target.environmentId} threadId={target.threadId} />
       ) : null}
     </>
@@ -188,9 +208,22 @@ class ThreadPane extends SimpleEditorPane {
   /**
    * Mounts the input's thread or draft. The tab of the thread a draft
    * became, which replaces the draft's (`selection.ts`), keeps the view
-   * mounted as it is.
+   * mounted as it is. A Star's tab mounts what the Star shows, which
+   * follows its conversation itself (`StarContent`).
    */
   async renderInput(input: EditorInput) {
+    if (input instanceof StarInput) {
+      this.root?.unmount();
+      this.root = createRoot(this.container);
+      const shown = { input };
+      this.shown = shown;
+      this.root.render(<StarContent starId={input.starId} />);
+      return {
+        dispose: () => {
+          if (this.shown === shown) this.release();
+        },
+      };
+    }
     const target: PaneTarget =
       input instanceof DraftInput
         ? { kind: "draft", environmentId: input.environmentId, projectId: input.projectId }
@@ -241,9 +274,12 @@ class ThreadPane extends SimpleEditorPane {
   }
 }
 
-/** Whether `editor` is a selection's own leftmost tab: a thread's, or a draft's. */
-export function isLeadTab(editor: unknown): editor is ThreadInput | DraftInput {
-  return editor instanceof ThreadInput || editor instanceof DraftInput;
+/** A selection's own leftmost tab: a thread's, a draft's or a Star's. */
+export type LeadTab = ThreadInput | DraftInput | StarInput;
+
+/** Whether `editor` is a selection's own leftmost tab. */
+export function isLeadTab(editor: unknown): editor is LeadTab {
+  return editor instanceof ThreadInput || editor instanceof DraftInput || editor instanceof StarInput;
 }
 
 /**
@@ -251,7 +287,7 @@ export function isLeadTab(editor: unknown): editor is ThreadInput | DraftInput {
  * tab, or the Settings page (`src/settings/`), which unlike a lead tab
  * closes. None has a status bar.
  */
-export function isShellTab(editor: unknown): editor is ThreadInput | DraftInput | SettingsInput {
+export function isShellTab(editor: unknown): editor is LeadTab | SettingsInput {
   return isLeadTab(editor) || isSettingsTab(editor);
 }
 
@@ -399,6 +435,59 @@ export class DraftInput extends SimpleEditorInput {
   }
 }
 
+/**
+ * The selected Star's tab (`src/stars/`), one for the Star whatever thread
+ * holds its conversation: its name, "Star" while it has none, with its mark
+ * as the icon, in the same pane, which mounts what the Star shows
+ * (`StarContent`). Like the thread tab it cannot be closed and is a
+ * singleton; its label follows the Star's store, since a tab restored at
+ * startup is created before the Stars are read.
+ */
+export class StarInput extends SimpleEditorInput {
+  private labelKey: string | undefined;
+
+  constructor(readonly starId: string) {
+    super(undefined);
+    this.addCapability(EditorInputCapabilities.CannotClose | EditorInputCapabilities.Singleton);
+    this.updateLabel();
+    this._register({ dispose: starStore.subscribe(() => this.updateLabel()) });
+  }
+
+  private star() {
+    return starById(this.starId);
+  }
+
+  /** Setting the name fires the label change that redraws the title and icon. */
+  private updateLabel(): void {
+    const star = this.star();
+    const key = JSON.stringify([star?.name, star?.tint]);
+    if (key === this.labelKey) return;
+    this.labelKey = key;
+    this.setName(star === undefined ? "Star" : starName(star));
+  }
+
+  override getTitle(): string {
+    const star = this.star();
+    return star === undefined || starName(star) === "Star" ? "Star" : `${starName(star)}, your Star`;
+  }
+
+  override getIcon(): URI {
+    return URI.parse(starMarkUrl(this.star()?.tint ?? DEFAULT_TINT));
+  }
+
+  override getLabelExtraClasses(): string[] {
+    return ["pult-thread-tab"];
+  }
+
+  override get typeId(): string {
+    return STAR_TYPE_ID;
+  }
+
+  override matches(other: unknown): boolean {
+    return other instanceof StarInput && other.starId === this.starId;
+  }
+}
+
 /** A saved tab's identity; one saved before tabs named their environment has none, and is dropped. */
 interface SerializedThreadInput {
   readonly environmentId?: string;
@@ -410,12 +499,16 @@ interface SerializedDraftInput {
   readonly projectId: string;
 }
 
+interface SerializedStarInput {
+  readonly starId: string;
+}
+
 /** The thread's editor pane and its serialisers, and `pult-shell.openThreadFile`, what the view's file links run (`files.ts`). */
 export function registerThreadPane(): void {
-  registerEditorPane(PANE_ID, "Pult Thread", ThreadPane, [ThreadInput, DraftInput]);
+  registerEditorPane(PANE_ID, "Pult Thread", ThreadPane, [ThreadInput, DraftInput, StarInput]);
   registerOpenThreadFileCommand();
   // Serialisable, so the editor part's saved state and the per-selection working
-  // sets (`selection.ts`) restore the thread's or draft's tab with the rest.
+  // sets (`selection.ts`) restore the thread's, draft's or Star's tab with the rest.
   registerEditorSerializer(
     PANE_ID,
     class implements IEditorSerializer {
@@ -443,6 +536,21 @@ export function registerThreadPane(): void {
       deserialize(instantiation: IInstantiationService, serialized: string): EditorInput | undefined {
         const { environmentId, projectId } = JSON.parse(serialized) as SerializedDraftInput;
         return environmentId === undefined ? undefined : instantiation.createInstance(DraftInput, environmentId, projectId);
+      }
+    },
+  );
+  registerEditorSerializer(
+    STAR_TYPE_ID,
+    class implements IEditorSerializer {
+      canSerialize(): boolean {
+        return true;
+      }
+      serialize(editor: StarInput): string {
+        return JSON.stringify({ starId: editor.starId } satisfies SerializedStarInput);
+      }
+      deserialize(instantiation: IInstantiationService, serialized: string): EditorInput | undefined {
+        const { starId } = JSON.parse(serialized) as SerializedStarInput;
+        return instantiation.createInstance(StarInput, starId);
       }
     },
   );

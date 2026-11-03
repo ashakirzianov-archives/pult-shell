@@ -6,7 +6,7 @@ import { ICodeEditorService } from "@codingame/monaco-vscode-api/vscode/vs/edito
 import type { ICodeEditor } from "@codingame/monaco-vscode-api/vscode/vs/editor/browser/editorBrowser";
 
 import { relativeTo, toHostPath } from "../files/paths.ts";
-import { selectedDraft, selectedThread } from "../threads/selection.ts";
+import { selectionTarget } from "../threads/selection.ts";
 import { threadStore } from "../threads/store.ts";
 import { diffExcerpt } from "./diffExcerpt.ts";
 import { composerStrip, HasComposerContext, selectedTarget } from "./index.tsx";
@@ -22,15 +22,15 @@ const CITABLE = ContextKeyExpr.and(
   ContextKeyExpr.or(ContextKeyExpr.equals("resourceScheme", "pult"), ContextKeyExpr.equals("resourceScheme", DIFF_SCHEME), ContextKeyExpr.has("isInDiffEditor")),
 );
 
-/** The selected thread's or draft's root, which a cited file's path is relative to. */
+/** The selected thread's or draft's root, or the selected Star's folder (`selectionTarget`), which a cited file's path is relative to. */
 function selectedRoot(): string | undefined {
-  const thread = selectedThread();
-  if (thread !== undefined) {
-    const shown = threadStore.thread(thread.environmentId, thread.threadId);
+  const target = selectionTarget();
+  if (target === undefined) return undefined;
+  if ("threadId" in target) {
+    const shown = threadStore.thread(target.environmentId, target.threadId);
     return shown?.projectRoot ?? (shown === undefined ? undefined : threadStore.project(shown.environmentId, shown.projectId)?.root) ?? undefined;
   }
-  const draft = selectedDraft();
-  return draft === undefined ? undefined : (threadStore.project(draft.environmentId, draft.projectId)?.root ?? undefined);
+  return threadStore.project(target.environmentId, target.projectId)?.root ?? undefined;
 }
 
 /**

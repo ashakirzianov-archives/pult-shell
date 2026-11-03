@@ -21,7 +21,8 @@ import * as Effect from "effect/Effect";
 import { connection } from "../connection/index.ts";
 import { nextAfterParking, type ParkActions, parkActions, parseCustomSnooze } from "./parking.ts";
 import { NO_THREAD_FEATURES } from "./presentation.ts";
-import { onDidSelectThread, selectedThread, selectThread } from "./selection.ts";
+import { isStarRoot } from "../stars/record.ts";
+import { onDidSelectThread, selectedThread, selectionTarget, selectThread } from "./selection.ts";
 import { scopedKey, type ShellThread, type ThreadFeatures, threadStore } from "./store.ts";
 
 /**
@@ -201,9 +202,17 @@ async function copyThreadLink(target: ThreadRef): Promise<void> {
   notifications.info(`Copied the link to ${known.title}.`);
 }
 
-/** What a thread offers now, under its server's features. */
+/**
+ * What a thread offers now, under its server's features. A Star's
+ * conversation, on no shelf, offers Settle alone while it is open, which
+ * puts the Star to sleep (`src/stars/`).
+ */
 export function threadParkActions(target: ShellThread): ParkActions {
-  return parkActions(target, threadStore.environment(target.environmentId)?.features ?? NO_THREAD_FEATURES);
+  const features = threadStore.environment(target.environmentId)?.features ?? NO_THREAD_FEATURES;
+  if (target.parentId === null && isStarRoot(target.projectRoot)) {
+    return { settle: features.settlement && !target.settled, unsettle: false, snooze: false, wake: false, pin: false, unpin: false };
+  }
+  return parkActions(target, features);
 }
 
 /** Upstream's snooze presets, each with its time, then Custom…, which asks the user for one. */
@@ -283,9 +292,10 @@ const ThreadSelectedContext = new RawContextKey<boolean>("pult.selectedThreadKno
  * window.
  */
 export function registerParkCommands(): void {
+  // The selected thread, or the selected Star's conversation, which Settle Thread puts to sleep: the selection stays on the Star.
   const selected = () => {
-    const selection = selectedThread();
-    return selection === undefined ? undefined : threadStore.thread(selection.environmentId, selection.threadId);
+    const selection = selectionTarget();
+    return selection === undefined || !("threadId" in selection) ? undefined : threadStore.thread(selection.environmentId, selection.threadId);
   };
   const command = (
     precondition: RawContextKey<boolean>,

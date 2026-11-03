@@ -37,6 +37,9 @@ import { registerPanelSettings, startPanelSettings } from "./panel/settings.ts";
 import { registerPanel } from "./panel/view.tsx";
 import { registerColorSchemeCommand } from "./settings/colorScheme.ts";
 import { registerSettingsPane } from "./settings/pane.tsx";
+import { registerStarCommands } from "./stars/commands.ts";
+import { startStars } from "./stars/model.ts";
+import { registerStarSettings, startStarSettings } from "./stars/settings.ts";
 import { startThreadModel } from "./threads/model.ts";
 import { registerThreadPane } from "./threads/pane.tsx";
 import { registerParkCommands } from "./threads/park.ts";
@@ -66,12 +69,15 @@ startConnection();
 // Before the workbench initialises, so the explorer restores its `pult:` folders on the page's provider.
 registerPultFiles();
 startThreadModel();
+startStars();
 registerLimits();
 registerThreadPane();
 registerSettingsPane();
 registerColorSchemeCommand();
 registerMode();
 registerPanelSettings();
+registerStarSettings();
+registerStarCommands();
 gateEditorMenus();
 registerStatusCommands();
 registerComposerCommands();
@@ -118,7 +124,7 @@ const options: IWorkbenchConstructionOptions = {
 };
 
 // Read as soon as the configuration service is up, so a hidden Settled shelf never shows while the workbench starts.
-const panelSettings = startPanelSettings();
+const panelSettings = Promise.all([startPanelSettings(), startStarSettings()]);
 
 await initialize(workbenchServices(), container, options, {
   userHome: Uri.file("/"),

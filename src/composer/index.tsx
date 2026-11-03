@@ -11,7 +11,8 @@ import { connection } from "../connection/connection.ts";
 import { allowNativeTextMenu } from "../nativeTextMenu.ts";
 import { BarTip } from "../threads/barEntries.tsx";
 import { isShellTab, threadView } from "../threads/pane.tsx";
-import { isSwitchingThread, onDidSelectThread, selectedDraft, selectedThread } from "../threads/selection.ts";
+import { starStore } from "../stars/model.ts";
+import { isSwitchingThread, onDidSelectThread, selectionTarget } from "../threads/selection.ts";
 import "./composer.css";
 
 const SHOW_COMPOSER = "pult-shell.showComposer";
@@ -73,20 +74,21 @@ function followFilled(): void {
     };
     onDidChangeComposers(update);
     onDidSelectThread(update);
+    // A Star's composer is its draft's until it wakes, then its conversation's.
+    starStore.subscribe(update);
     connection.onDidChange(update);
     update();
   });
 }
 
-/** The selected thread or draft, on the environment the page holds it by, which the strip's composer is. */
+/** The selected thread or draft, or the selected Star's (`selectionTarget`), on the environment the page holds it by, which the strip's composer is. */
 export function selectedTarget(): ViewTarget | null {
-  const thread = selectedThread();
-  const draft = selectedDraft();
-  const environmentId = connection.environment((thread ?? draft)?.environmentId ?? "")?.environmentId;
-  if (environmentId === undefined) return null;
-  if (thread !== undefined) return { kind: "thread", environmentId, threadId: thread.threadId };
-  if (draft !== undefined) return { kind: "draft", environmentId, projectId: draft.projectId };
-  return null;
+  const target = selectionTarget();
+  const environmentId = connection.environment(target?.environmentId ?? "")?.environmentId;
+  if (target === undefined || environmentId === undefined) return null;
+  return "threadId" in target
+    ? { kind: "thread", environmentId, threadId: target.threadId }
+    : { kind: "draft", environmentId, projectId: target.projectId };
 }
 
 const sameTarget = (left: ViewTarget | null, right: ViewTarget | null) => JSON.stringify(left) === JSON.stringify(right);
@@ -210,6 +212,7 @@ export async function startComposerStrip(): Promise<void> {
   editors.onDidActiveEditorChange(update);
   editors.onDidEditorsChange(update);
   onDidSelectThread(update);
+  starStore.subscribe(update);
   onDidChangeState.event(update);
   connection.onDidChange(update);
   update();

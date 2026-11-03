@@ -13,7 +13,8 @@ import { Uri } from "monaco-editor";
 
 import { changesState } from "./changes/view.ts";
 import { connection } from "./connection/index.ts";
-import { selectedDraft, selectedThread } from "./threads/selection.ts";
+import { starStore } from "./stars/model.ts";
+import { selectedDraft, selectedStar, selectedThread } from "./threads/selection.ts";
 import { threadStore } from "./threads/store.ts";
 
 /** `window.pult`: a handle for driving the spike from the console. */
@@ -24,7 +25,9 @@ export function installDebugHandle(): void {
       // Every environment the page holds, in the order they were connected.
       connection: () => connection.environments,
       threads: () => threadStore.get(),
-      selected: () => selectedThread() ?? selectedDraft(),
+      selected: () => selectedThread() ?? selectedDraft() ?? (selectedStar() === undefined ? undefined : { starId: selectedStar() }),
+      // The Stars, each with its homes, its current conversation and its state.
+      stars: () => starStore.get(),
       // What the changes view shows and why: its thread, root, group sizes and last failure.
       changes: () => changesState(),
       // The editor part's tabs, per group in grid order; `*` marks the active one.

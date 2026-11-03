@@ -17,21 +17,18 @@ import { ContextKeyExpr, RawContextKey } from "@codingame/monaco-vscode-api/vsco
 import { StorageScope, StorageTarget } from "@codingame/monaco-vscode-api/vscode/vs/platform/storage/common/storage";
 import { ViewContainerLocation } from "@codingame/monaco-vscode-api/vscode/vs/workbench/common/views";
 import { LifecyclePhase } from "@codingame/monaco-vscode-api/vscode/vs/workbench/services/lifecycle/common/lifecycle";
-import { request } from "@t3tools/client-runtime/rpc";
-import { WS_METHODS } from "@t3tools/contracts";
 
 import { pickEnvironment } from "../connection/commands.ts";
 import { connection } from "../connection/index.ts";
 import { commonParent, folderShows, namesEnvironment, projectsUnder, PULT_SCHEME, relativeTo, toHostPath, toUriPath } from "../files/paths.ts";
-import { whenReady } from "../files/server.ts";
+import { environmentHome } from "../files/server.ts";
 import { knownRoots, projectRootPaths } from "../files/workspace.ts";
 import { type ProjectIconSource, threadProjectIcon } from "../threads/projectIcon.ts";
 import {
   type DraftSelection,
   explorerSelected,
   onDidSelectThread,
-  selectedDraft,
-  selectedThread,
+  selectionTarget,
   selectExplorer,
   type ThreadSelection,
 } from "../threads/selection.ts";
@@ -159,21 +156,6 @@ function threadFolder(thread: ShellThread): Folder | undefined {
   return { uri: pultUri(thread.environmentId, thread.projectRoot), name: thread.projectName };
 }
 
-/** Each environment's home directory, as its server resolves `~/` once connected; a failed lookup is asked again next time. */
-const homes = new Map<string, Promise<string>>();
-
-function homeOf(environmentId: string): Promise<string> {
-  let home = homes.get(environmentId);
-  if (home === undefined) {
-    home = whenReady(environmentId)
-      .then(() => connection.run(environmentId, request(WS_METHODS.filesystemBrowse, { partialPath: "~/" })))
-      .then(({ parentPath }) => parentPath);
-    home.catch(() => homes.delete(environmentId));
-    homes.set(environmentId, home);
-  }
-  return home;
-}
-
 /**
  * The environment's folder: the closest directory above its projects, which
  * the explorer lists only the way to (`folderShows`), or its home while it
@@ -182,7 +164,7 @@ function homeOf(environmentId: string): Promise<string> {
  * name, as the cards' chips name it.
  */
 async function environmentFolder(environmentId: string): Promise<Folder> {
-  const home = await homeOf(environmentId).then(toUriPath, (error: unknown) => {
+  const home = await environmentHome(environmentId).then(toUriPath, (error: unknown) => {
     if (knownRoots(environmentId).length === 0) throw error;
     return undefined;
   });
@@ -342,7 +324,7 @@ export async function followExplorerScope(): Promise<void> {
     for (const id of HIDDEN_VIEW_IDS) model.setVisible(id, false);
   }
   const followSelection = () => {
-    lastSelected = selectedThread() ?? selectedDraft() ?? lastSelected;
+    lastSelected = selectionTarget() ?? lastSelected;
   };
   followSelection();
   onDidSelectThread(() => {
@@ -361,7 +343,11 @@ export async function followExplorerScope(): Promise<void> {
       void reroot().then(reveal);
     } else if (effectiveRoot() !== undefined) void setScope("environment").then(reroot).then(reveal);
   });
-  threadStore.subscribe(() => void reroot());
+  // A Star's conversation moves from thread to thread, and wakes from its draft, as the store changes.
+  threadStore.subscribe(() => {
+    followSelection();
+    void reroot();
+  });
   await reroot();
 }
 

@@ -119,6 +119,22 @@ export function whenReady(environmentId: string): Promise<void> {
   });
 }
 
+/** Each environment's home directory, as its server resolves `~/` once connected; a failed lookup is asked again next time. */
+const homes = new Map<string, Promise<string>>();
+
+/** The environment's home directory, a host path: the explorer's folder without projects, and where its Stars live (`src/stars/`). */
+export function environmentHome(environmentId: string): Promise<string> {
+  let home = homes.get(environmentId);
+  if (home === undefined) {
+    home = whenReady(environmentId)
+      .then(() => connection.run(environmentId, request(WS_METHODS.filesystemBrowse, { partialPath: "~/" })))
+      .then(({ parentPath }) => parentPath);
+    home.catch(() => homes.delete(environmentId));
+    homes.set(environmentId, home);
+  }
+  return home;
+}
+
 function unavailable(environmentId: string) {
   const environment = connection.environment(environmentId);
   return new EnvironmentRpcUnavailableError({

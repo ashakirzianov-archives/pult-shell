@@ -22,7 +22,9 @@ import { IEditorService } from "@codingame/monaco-vscode-api/vscode/vs/workbench
 
 import { SettingsInput } from "../settings/pane.tsx";
 import { isStarRoot } from "../stars/record.ts";
-import { DraftInput, isLeadTab, onDidPromoteDraft, ThreadInput } from "./pane.tsx";
+import { starById, starOfProject, starOfThread, starTarget } from "../stars/model.ts";
+import { HasStarContext, pickStar } from "../stars/commands.ts";
+import { DraftInput, isLeadTab, type LeadTab, onDidPromoteDraft, StarInput, ThreadInput } from "./pane.tsx";
 import { isSubagent, type ShellProject, type ShelfName, threadStore } from "./store.ts";
 
 /** The thread whose tabs the editor part shows, in the environment it belongs to. */
@@ -44,7 +46,12 @@ interface ExplorerSelection {
 
 const EXPLORER: ExplorerSelection = { explorer: true };
 
-type Selection = ThreadSelection | DraftSelection | ExplorerSelection;
+/** A Star (`src/stars/`): its one tab set across the threads that hold its conversation, led by its tab. */
+interface StarSelection {
+  readonly starId: string;
+}
+
+type Selection = ThreadSelection | DraftSelection | ExplorerSelection | StarSelection;
 
 function isDraft(selection: Selection | undefined): selection is DraftSelection {
   return typeof selection === "object" && "projectId" in selection;
@@ -52,6 +59,10 @@ function isDraft(selection: Selection | undefined): selection is DraftSelection 
 
 function isExplorer(selection: Selection | undefined): selection is ExplorerSelection {
   return typeof selection === "object" && "explorer" in selection;
+}
+
+function isStar(selection: Selection | undefined): selection is StarSelection {
+  return typeof selection === "object" && "starId" in selection;
 }
 
 const STORAGE_KEY = "pult.shell.selectedThread";
@@ -99,6 +110,27 @@ export function selectedDraft(): DraftSelection | undefined {
 /** Whether the Explorer workspace is selected. */
 export function explorerSelected(): boolean {
   return isExplorer(selected);
+}
+
+/** The selected Star's id, if a Star is selected. */
+export function selectedStar(): string | undefined {
+  return isStar(selected) ? selected.starId : undefined;
+}
+
+/**
+ * The thread or draft the selection's composer and files belong to: the
+ * selected thread or draft, or the selected Star's current conversation,
+ * or while it sleeps its draft (`starTarget`); undefined for the Explorer
+ * workspace, or a Star with nothing to show.
+ */
+export function selectionTarget(): ThreadSelection | DraftSelection | undefined {
+  if (!isStar(selected)) return selectedThread() ?? selectedDraft();
+  const star = starById(selected.starId);
+  const target = star === undefined ? undefined : starTarget(star);
+  if (target === undefined) return undefined;
+  return target.kind === "thread"
+    ? { environmentId: target.environmentId, threadId: target.threadId }
+    : { environmentId: target.environmentId, projectId: target.projectId };
 }
 
 /** The Explorer workspace's open files, in their groups' order, and its active editor's file, if it has one. */
@@ -177,10 +209,23 @@ export function onDidSelectThread(listener: () => void): () => void {
  * group and persists in workspace storage), named by environment and thread;
  * the next thread's working set is applied, or an empty part, and its thread
  * tab is opened leftmost in the first group if missing. Switches run one at a
- * time, in call order.
+ * time, in call order. A Star's thread, its conversation now or earlier,
+ * selects the Star, whose tab shows its conversation.
  */
 export function selectThread(environmentId: string, threadId: string): Promise<void> {
+  const thread = threadStore.thread(environmentId, threadId);
+  const star = thread === undefined ? undefined : starOfThread(thread);
+  if (star !== undefined) return selectStar(star.id);
   return enqueue(() => switchTo({ environmentId, threadId }));
+}
+
+/**
+ * Selects a Star as a thread is selected: its own tab set, one across the
+ * threads of its conversation, led by its tab (`StarInput`), whose pane
+ * shows its current conversation or its draft (`src/stars/tab.tsx`).
+ */
+export function selectStar(starId: string): Promise<void> {
+  return enqueue(() => switchTo({ starId }));
 }
 
 /**
@@ -210,9 +255,12 @@ function isSettingsTab(editor: unknown): editor is SettingsInput {
  * Selects the project's draft of a new thread as a thread is selected: its
  * own tab set, led by the draft's tab (`DraftInput`), whose pane mounts
  * upstream's composer on the draft the view remembers for the project, or a
- * new one. The draft's tabs are kept as a working set like a thread's.
+ * new one. The draft's tabs are kept as a working set like a thread's. A
+ * Star's project's draft is the Star's, which is selected instead.
  */
 export function selectDraft(environmentId: string, projectId: string): Promise<void> {
+  const star = starOfProject(environmentId, projectId);
+  if (star !== undefined) return selectStar(star.id);
   return enqueue(() => switchTo({ environmentId, projectId }));
 }
 
@@ -302,26 +350,31 @@ async function switchTo(next: Selection): Promise<void> {
     return true;
   }
 
-  /** The thread's or draft's tab in the first group, leftmost; other threads' and drafts' tabs leave, all of them for the Explorer workspace. */
+  /** The thread's, draft's or Star's tab in the first group, leftmost; other selections' tabs leave, all of them for the Explorer workspace. */
   async function showLeadTab(lead: Selection): Promise<void> {
     if (isExplorer(lead)) return closeLeadTabs(() => true);
-    const isOwn = (editor: ThreadInput | DraftInput) =>
-      editor.environmentId === lead.environmentId &&
-      (isDraft(lead)
-        ? editor instanceof DraftInput && editor.projectId === lead.projectId
-        : editor instanceof ThreadInput && editor.threadId === lead.threadId);
+    const isOwn = (editor: LeadTab) =>
+      isStar(lead)
+        ? editor instanceof StarInput && editor.starId === lead.starId
+        : !(editor instanceof StarInput) &&
+          editor.environmentId === lead.environmentId &&
+          (isDraft(lead)
+            ? editor instanceof DraftInput && editor.projectId === lead.projectId
+            : editor instanceof ThreadInput && editor.threadId === lead.threadId);
     await closeLeadTabs((editor) => !isOwn(editor));
     const first = groups.getGroups(GroupsOrder.GRID_APPEARANCE)[0] ?? groups.activeGroup;
     if (!first.editors.some(isLeadTab)) {
-      const tab = isDraft(lead)
-        ? instantiation.createInstance(DraftInput, lead.environmentId, lead.projectId)
-        : instantiation.createInstance(ThreadInput, lead.environmentId, lead.threadId);
+      const tab = isStar(lead)
+        ? instantiation.createInstance(StarInput, lead.starId)
+        : isDraft(lead)
+          ? instantiation.createInstance(DraftInput, lead.environmentId, lead.projectId)
+          : instantiation.createInstance(ThreadInput, lead.environmentId, lead.threadId);
       await first.openEditor(tab, { pinned: true, index: 0 });
     }
     keepThreadTabsFirst(groups.getGroups(GroupsOrder.GRID_APPEARANCE));
   }
 
-  async function closeLeadTabs(stale: (editor: ThreadInput | DraftInput) => boolean): Promise<void> {
+  async function closeLeadTabs(stale: (editor: LeadTab) => boolean): Promise<void> {
     for (const group of groups.getGroups(GroupsOrder.GRID_APPEARANCE)) {
       const closing = group.editors.filter((editor) => isLeadTab(editor) && stale(editor));
       if (closing.length > 0) await group.closeEditors(closing, { force: true });
@@ -331,6 +384,7 @@ async function switchTo(next: Selection): Promise<void> {
 
 function workingSetName(selection: Selection): string {
   if (isExplorer(selection)) return "pult.explorer";
+  if (isStar(selection)) return `pult.star/${selection.starId}`;
   return isDraft(selection)
     ? `pult.draft/${selection.environmentId}/${selection.projectId}`
     : `pult.thread/${selection.environmentId}/${selection.threadId}`;
@@ -389,8 +443,10 @@ export async function restoreThreadSelection(): Promise<void> {
  * `pult-shell.selectThread [environmentId] [threadId]`, the palette's "Pult:
  * Open Thread…": a thread id alone is the first thread the store lists with
  * it; with no id, a quick pick of every environment's threads in the cards'
- * order, subagents left out, each one's environment named while the page
- * holds several. `pult-shell.selectSettings`, the palette's "Pult: Show
+ * order, subagents and Stars' threads left out, each one's environment named
+ * while the page holds several. `pult-shell.selectStar [starId]`, the
+ * palette's "Pult: Open Star", the page's Star, picked while it holds
+ * several. `pult-shell.selectSettings`, the palette's "Pult: Show
  * Settings", on Cmd+, over the workbench's own binding, opens the Pult
  * settings page among the thread's tabs; the left panel's gear runs it
  * too (`src/panel/rows.tsx`). `pult-shell.newThread`, a project's draft;
@@ -441,6 +497,24 @@ export function registerSelectThreadCommand(): void {
           activeItem: items.find(({ thread }) => thread.id === current?.threadId && thread.environmentId === current.environmentId),
         });
         if (picked !== undefined) await selectThread(picked.thread.environmentId, picked.thread.id);
+      }
+    },
+  );
+  registerAction2(
+    class extends Action2 {
+      constructor() {
+        super({
+          id: "pult-shell.selectStar",
+          title: { value: "Open Star", original: "Open Star" },
+          category: { value: "Pult", original: "Pult" },
+          f1: true,
+          precondition: HasStarContext,
+        });
+      }
+
+      async run(accessor: ServicesAccessor, starId?: unknown): Promise<void> {
+        const star = await pickStar(accessor.get(IQuickInputService), starId, "Open a Star");
+        if (star !== undefined) await selectStar(star.id);
       }
     },
   );

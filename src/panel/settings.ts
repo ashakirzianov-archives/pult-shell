@@ -29,7 +29,7 @@ export type SettledChoice = (typeof SETTLED_CHOICES)[number]["value"];
 const SettledHiddenContext = new RawContextKey<boolean>("pult.settledShelfHidden", false);
 
 /** A setting's value as the panel reads it, synchronously, and a listener called when it changes; its default until `startPanelSettings` reads the user's. */
-function settingStore<Value>(initial: Value) {
+export function settingStore<Value>(initial: Value) {
   let value = initial;
   const listeners = new Set<() => void>();
   return {

@@ -1,0 +1,28 @@
+/* The fold of a Star's earlier conversations (src/stars/tab.tsx), at the top of
+   its timeline inside the thread view, in the view's own colours: a divider
+   as upstream's "Load earlier turns" is. */
+.pult-star-fold {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 0 8px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.pult-star-fold-rule {
+  flex: 1;
+  height: 1px;
+  background: color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.pult-star-fold-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.pult-star-fold-label .codicon {
+  font-size: 12px;
+}
