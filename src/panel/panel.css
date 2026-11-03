@@ -827,6 +827,16 @@
   position: relative;
 }
 
+/* Its chevron lined up with the other shelves' (`.pult-shelf > .pult-shelf-header`). */
+.pult-limits-header > .pult-shelf-header {
+  padding-right: 0;
+}
+
+.pult-limits-header > .pult-shelf-header > .codicon:last-child {
+  width: 26px;
+  text-align: center;
+}
+
 .pult-limits-refresh {
   position: absolute;
   top: 4px;
@@ -903,10 +913,14 @@
   color: var(--vscode-descriptionForeground);
 }
 
+/* The account's chips at the line's end, together. */
+.pult-limits-account-top .pult-card-environment {
+  margin-right: 0;
+}
+
 .pult-limits-plan + .pult-card-environment,
 .pult-limits-name + .pult-card-environment {
   margin-left: auto;
-  margin-right: 0;
 }
 
 .pult-limits-windows {
