@@ -1,3 +1,5 @@
+import { getService, IStorageService } from "@codingame/monaco-vscode-api";
+import { StorageScope, StorageTarget } from "@codingame/monaco-vscode-api/vscode/vs/platform/storage/common/storage";
 import { request } from "@t3tools/client-runtime/rpc";
 import { ORCHESTRATION_V2_WS_METHODS, ThreadId } from "@t3tools/contracts";
 
@@ -20,6 +22,10 @@ const CLOCK_CHECK_MS = 60_000;
 const RETRY_MS = 5 * 60_000;
 /** How many transcripts the page checks or writes at once. */
 const TRANSCRIPTS_AT_ONCE = 2;
+/** The workbench storage's record of the whole transcripts found or written, by `scopedKey` the settlement each was for. */
+const RECORD_STORAGE_KEY = "pult.stars.transcripts";
+/** How many conversations the record keeps, the latest kept: one it forgot has its transcript's front matter read once more. */
+const RECORD_LIMIT = 1_000;
 
 /**
  * An open conversation as the page last evaluated it: by what of its shell
@@ -86,21 +92,27 @@ const sameInstant = (left: string | undefined, right: string) => left !== undefi
  * still holding, the thread is settled, the server refusing it if a run
  * started meanwhile. A settled conversation's transcript is written where it
  * is missing, or its `ended` is not the thread's settlement (un-settled and
- * settled again), and only when its text differs, so pages racing write one
- * file; each one checked once per settlement per page session. A server
- * without thread settlement keeps its Star awake. Nothing runs while Show
- * Star is off.
+ * settled again) or partial, and only when its text differs, so pages racing
+ * write one file; each one checked once per settlement per page session,
+ * and not at all while the workbench's storage records its transcript whole
+ * for its settlement and its folder lists it. A server without thread
+ * settlement keeps its Star awake. Held awake too while a thread below the
+ * conversation works, or its composer holds an unsent message. Nothing runs
+ * while Show Star is off.
  */
 class StarConversations {
   private readonly evaluations = new Map<string, Evaluation>();
   private readonly settling = new Set<string>();
-  /** The settlement each conversation's transcript was found or written for, by `scopedKey`. */
+  /** The settlement each conversation's transcript was found or written for in this page session, by `scopedKey`. */
   private readonly kept = new Map<string, string>();
+  /** Across sessions, from the workbench's storage: the settlement each whole transcript was found or written for; undefined until read. */
+  private record: Map<string, string> | undefined;
   private readonly keeping = new Set<string>();
   private readonly keepFailedAt = new Map<string, number>();
   private timer: ReturnType<typeof setTimeout> | undefined;
 
   start(): void {
+    void this.readRecord();
     threadStore.subscribe(() => this.update());
     starStore.subscribe(() => this.update());
     starEnabled.subscribe(() => this.update());
@@ -203,16 +215,22 @@ class StarConversations {
   private keep(homes: ReadonlyArray<StarHome>, thread: ShellThread, now: number): number | undefined {
     const key = scopedKey(thread.environmentId, thread.id);
     const settledAt = thread.settledAt;
-    if (settledAt === null || this.kept.get(key) === settledAt || this.keeping.has(key)) return undefined;
+    if (settledAt === null || this.record === undefined || this.kept.get(key) === settledAt || this.keeping.has(key)) return undefined;
+    const home = homes.find((each) => each.environmentId === thread.environmentId);
+    // Recorded whole for this settlement and listed still: trusted, its file not read.
+    if (this.record.get(key) === settledAt && home?.transcripts.includes(transcriptName(thread.createdAt, thread.id))) {
+      this.kept.set(key, settledAt);
+      return undefined;
+    }
     const failedAt = this.keepFailedAt.get(key);
     if (failedAt !== undefined && now - failedAt < RETRY_MS) return failedAt + RETRY_MS;
-    const home = homes.find((each) => each.environmentId === thread.environmentId);
     if (home === undefined || connection.environment(home.environmentId)?.phase !== "ready" || this.keeping.size >= TRANSCRIPTS_AT_ONCE) return undefined;
     this.keeping.add(key);
     void this.write(home, thread, settledAt).then(
-      () => {
+      (whole) => {
         this.kept.set(key, settledAt);
         this.keepFailedAt.delete(key);
+        if (whole) void this.remember(key, settledAt);
       },
       (error: unknown) => {
         console.warn(`[pult-shell] could not write the transcript of the Star's conversation ${thread.id}: ${errorMessage(error)}`);
@@ -225,23 +243,57 @@ class StarConversations {
     return undefined;
   }
 
-  /** Writes the transcript where it is missing, ended otherwise or partial, and only when its text differs from the file's. */
-  private async write(home: StarHome, thread: ShellThread, settledAt: string): Promise<void> {
+  /**
+   * Writes the transcript where it is missing, ended otherwise or partial,
+   * and only when its text differs from the file's; whether the file then
+   * holds the whole conversation as of `settledAt`.
+   */
+  private async write(home: StarHome, thread: ShellThread, settledAt: string): Promise<boolean> {
     const name = transcriptName(thread.createdAt, thread.id);
     const relativePath = `${transcriptsFolder(home.environmentId)}/${name}`;
     const server = environmentServer(home.environmentId);
     const existing = home.transcripts.includes(name) ? await server.readFile({ cwd: home.root, relativePath, allowMissing: true }) : undefined;
     const present = existing !== undefined && existing.exists !== false;
     const head = present ? transcriptHead(existing.contents) : undefined;
-    if (head !== undefined && sameInstant(head.ended, settledAt) && !head.partial) return;
+    if (head !== undefined && sameInstant(head.ended, settledAt) && !head.partial) return true;
     const { projection, partial } = await readHistory(thread);
     const contents = formatTranscript(projection, threadStore.environment(home.environmentId)?.name ?? home.environmentId, { partial });
     // Un-settled since: its next settlement writes it.
-    if (contents === undefined) return;
-    if (present && !existing.truncated && existing.contents === contents) return;
+    if (contents === undefined) return false;
+    const whole = !partial && sameInstant(transcriptHead(contents)?.ended, settledAt);
+    if (present && !existing.truncated && existing.contents === contents) return whole;
     await server.writeFile({ cwd: home.root, relativePath, contents });
     refreshTranscript(home.environmentId, home.root, name);
     await rereadStars(home.environmentId);
+    return whole;
+  }
+
+  /** Reads the record of whole transcripts from the workbench's storage, then looks again. */
+  private async readRecord(): Promise<void> {
+    let entries: Array<[string, string]> = [];
+    try {
+      const stored = (await getService(IStorageService)).get(RECORD_STORAGE_KEY, StorageScope.APPLICATION);
+      const parsed: unknown = stored === undefined ? {} : JSON.parse(stored);
+      if (typeof parsed === "object" && parsed !== null) {
+        entries = Object.entries(parsed).flatMap(([key, value]) => (typeof value === "string" ? [[key, value] as [string, string]] : []));
+      }
+    } catch (error) {
+      console.warn(`[pult-shell] could not read the record of the Stars' transcripts: ${errorMessage(error)}`);
+    }
+    this.record = new Map(entries);
+    this.update();
+  }
+
+  /** Records a whole transcript for its settlement, the latest last, the oldest let go of past the limit. */
+  private async remember(key: string, settledAt: string): Promise<void> {
+    if (this.record === undefined || this.record.get(key) === settledAt) return;
+    this.record.delete(key);
+    this.record.set(key, settledAt);
+    for (const oldest of this.record.keys()) {
+      if (this.record.size <= RECORD_LIMIT) break;
+      this.record.delete(oldest);
+    }
+    (await getService(IStorageService)).store(RECORD_STORAGE_KEY, JSON.stringify(Object.fromEntries(this.record)), StorageScope.APPLICATION, StorageTarget.MACHINE);
   }
 }
 
