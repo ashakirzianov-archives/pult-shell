@@ -1,5 +1,7 @@
 # Pult
 
+> **Moved.** Since 2026-11-04 Pult lives in [`ashakirzianov/pult`](https://github.com/ashakirzianov/pult) (formerly `t3code-extensible`), with the shell at `apps/pult` and its history carried over. This repository is archived as it stood then.
+
 Pult is a client for coding agents, centred on threads, with editing a convenience. It is VS Code's workbench, vendored through [`@codingame/monaco-vscode-api`](https://github.com/CodinGame/monaco-vscode-api), in a page of its own, with upstream's thread view built in and connected to a running [T3 Code Extensible](https://github.com/ashakirzianov/t3code-extensible) server. It runs no server of its own.
 
 This history starts on 2026-10-23. The previous line, a web client and an Electron shell copied from T3 Code, is archived as [`pult-app`](https://github.com/ashakirzianov/pult-app).
